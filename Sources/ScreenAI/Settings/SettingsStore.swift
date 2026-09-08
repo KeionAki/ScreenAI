@@ -1,0 +1,134 @@
+import Foundation
+import Combine
+
+/// 所有用户偏好设置；写入 UserDefaults，API Key 走钥匙串。
+final class SettingsStore: ObservableObject {
+    static let shared = SettingsStore()
+
+    static let defaultPrompt = "你是一个题目识别与解答助手。请分析提供的屏幕截图，识别其中包含的题目内容（包括图片和文字区域），将题目完整地整理出来，然后给出正确答案。仅输出答案文本，不要包含额外解释。如果截图中没有题目，输出\"未检测到题目\"。"
+
+    static var defaultHistoryDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("ScreenAI/History", isDirectory: true)
+    }
+
+    private let d: UserDefaults
+
+    // MARK: API
+    @Published var apiProvider: AIProviderKind { didSet { d.set(apiProvider.rawValue, forKey: "apiProvider") } }
+    @Published var modelByProvider: [String: String] { didSet { d.set(modelByProvider, forKey: "modelByProvider") } }
+    @Published var customEndpoint: String { didSet { d.set(customEndpoint, forKey: "customEndpoint") } }
+    @Published var promptTemplate: String { didSet { d.set(promptTemplate, forKey: "promptTemplate") } }
+    @Published var apiTimeout: Double { didSet { d.set(apiTimeout, forKey: "apiTimeout") } }
+    @Published var maxTokens: Int { didSet { d.set(maxTokens, forKey: "maxTokens") } }
+    @Published var streamingEnabled: Bool { didSet { d.set(streamingEnabled, forKey: "streamingEnabled") } }
+    @Published var maxImageLongEdge: Int { didSet { d.set(maxImageLongEdge, forKey: "maxImageLongEdge") } }
+    @Published var jpegQuality: Double { didSet { d.set(jpegQuality, forKey: "jpegQuality") } }
+    @Published var thinkingMode: ThinkingMode { didSet { d.set(thinkingMode.rawValue, forKey: "thinkingMode") } }
+    @Published var imageDetail: String { didSet { d.set(imageDetail, forKey: "imageDetail") } }   // auto / low / high
+
+    // MARK: Capture
+    @Published var captureScope: CaptureScope { didSet { d.set(captureScope.rawValue, forKey: "captureScope") } }
+    @Published var selectedDisplayID: UInt32 { didSet { d.set(Int(selectedDisplayID), forKey: "selectedDisplayID") } }
+    @Published var selectedWindow: WindowRef? { didSet { d.setCodable(selectedWindow, forKey: "selectedWindow") } }
+    @Published var selectedRegion: RegionRef? { didSet { d.setCodable(selectedRegion, forKey: "selectedRegion") } }
+    @Published var windowLossBehavior: TargetLossBehavior { didSet { d.set(windowLossBehavior.rawValue, forKey: "windowLossBehavior") } }
+    @Published var displayLossBehavior: TargetLossBehavior { didSet { d.set(displayLossBehavior.rawValue, forKey: "displayLossBehavior") } }
+    @Published var regionLossBehavior: TargetLossBehavior { didSet { d.set(regionLossBehavior.rawValue, forKey: "regionLossBehavior") } }
+    @Published var debounceMs: Int { didSet { d.set(debounceMs, forKey: "debounceMs") } }
+    @Published var captureEnabled: Bool { didSet { d.set(captureEnabled, forKey: "captureEnabled") } }
+    @Published var hotkey: Hotkey { didSet { d.setCodable(hotkey, forKey: "hotkey") } }
+
+    // MARK: Caption
+    @Published var captionMode: CaptionMode { didSet { d.set(captionMode.rawValue, forKey: "captionMode") } }
+    @Published var captionOpacity: Double { didSet { d.set(captionOpacity, forKey: "captionOpacity") } }
+    @Published var captionFontSize: Double { didSet { d.set(captionFontSize, forKey: "captionFontSize") } }
+    @Published var captionHistoryCount: Int { didSet { d.set(captionHistoryCount, forKey: "captionHistoryCount") } }
+    @Published var captionWidth: Double { didSet { d.set(captionWidth, forKey: "captionWidth") } }
+
+    // MARK: Connection
+    @Published var listenPort: Int { didSet { d.set(listenPort, forKey: "listenPort") } }
+    /// 对外公布的地址形式："hostname"（<主机名>.local，走 mDNS/IPv6 链路本地，不受 VPN 的 IPv4 过滤影响）或 "ip"（局域网 IPv4）
+    @Published var addressMode: String { didSet { d.set(addressMode, forKey: "addressMode") } }
+
+    // MARK: History
+    @Published var historyDirectory: String { didSet { d.set(historyDirectory, forKey: "historyDirectory") } }
+
+    init(defaults: UserDefaults = .standard) {
+        d = defaults
+        apiProvider = AIProviderKind(rawValue: d.string(forKey: "apiProvider") ?? "") ?? .openai
+        modelByProvider = (d.dictionary(forKey: "modelByProvider") as? [String: String]) ?? [:]
+        customEndpoint = d.string(forKey: "customEndpoint") ?? ""
+        promptTemplate = d.string(forKey: "promptTemplate") ?? SettingsStore.defaultPrompt
+        apiTimeout = d.object(forKey: "apiTimeout") as? Double ?? 60
+        maxTokens = d.object(forKey: "maxTokens") as? Int ?? 8192
+        streamingEnabled = d.object(forKey: "streamingEnabled") as? Bool ?? true
+        maxImageLongEdge = d.object(forKey: "maxImageLongEdge") as? Int ?? 1600
+        jpegQuality = d.object(forKey: "jpegQuality") as? Double ?? 0.85
+        thinkingMode = ThinkingMode(rawValue: d.string(forKey: "thinkingMode") ?? "") ?? .default
+        imageDetail = d.string(forKey: "imageDetail") ?? "auto"
+
+        captureScope = CaptureScope(rawValue: d.string(forKey: "captureScope") ?? "") ?? .fullScreen
+        selectedDisplayID = UInt32(clamping: d.integer(forKey: "selectedDisplayID"))
+        selectedWindow = d.codable(WindowRef.self, forKey: "selectedWindow")
+        selectedRegion = d.codable(RegionRef.self, forKey: "selectedRegion")
+        windowLossBehavior = TargetLossBehavior(rawValue: d.string(forKey: "windowLossBehavior") ?? "") ?? .stop
+        displayLossBehavior = TargetLossBehavior(rawValue: d.string(forKey: "displayLossBehavior") ?? "") ?? .stop
+        regionLossBehavior = TargetLossBehavior(rawValue: d.string(forKey: "regionLossBehavior") ?? "") ?? .stop
+        debounceMs = d.object(forKey: "debounceMs") as? Int ?? 300
+        captureEnabled = d.object(forKey: "captureEnabled") as? Bool ?? true
+        hotkey = d.codable(Hotkey.self, forKey: "hotkey") ?? Hotkey.default
+
+        captionMode = CaptionMode(rawValue: d.string(forKey: "captionMode") ?? "") ?? .staticList
+        captionOpacity = d.object(forKey: "captionOpacity") as? Double ?? 0.9
+        captionFontSize = d.object(forKey: "captionFontSize") as? Double ?? 14
+        captionHistoryCount = d.object(forKey: "captionHistoryCount") as? Int ?? 5
+        captionWidth = d.object(forKey: "captionWidth") as? Double ?? 400
+
+        listenPort = d.object(forKey: "listenPort") as? Int ?? 8899
+        addressMode = d.string(forKey: "addressMode") ?? "hostname"
+        historyDirectory = d.string(forKey: "historyDirectory") ?? SettingsStore.defaultHistoryDirectory.path
+    }
+
+    // MARK: Derived
+
+    var currentModel: String {
+        get { modelByProvider[apiProvider.rawValue] ?? apiProvider.defaultModel }
+        set { modelByProvider[apiProvider.rawValue] = newValue }
+    }
+
+    func model(for kind: AIProviderKind) -> String {
+        modelByProvider[kind.rawValue] ?? kind.defaultModel
+    }
+
+    var currentEndpoint: String {
+        apiProvider == .custom ? customEndpoint : apiProvider.defaultEndpoint
+    }
+
+    func apiKey(for kind: AIProviderKind) -> String {
+        KeychainStore.read(account: kind.rawValue) ?? ""
+    }
+
+    func setAPIKey(_ key: String, for kind: AIProviderKind) {
+        KeychainStore.write(account: kind.rawValue, value: key.trimmingCharacters(in: .whitespacesAndNewlines))
+        objectWillChange.send()
+    }
+
+    var historyDirectoryURL: URL { URL(fileURLWithPath: historyDirectory, isDirectory: true) }
+}
+
+extension UserDefaults {
+    func setCodable<T: Encodable>(_ value: T?, forKey key: String) {
+        guard let value = value, let data = try? JSONEncoder().encode(value) else {
+            removeObject(forKey: key)
+            return
+        }
+        set(data, forKey: key)
+    }
+
+    func codable<T: Decodable>(_ type: T.Type, forKey key: String) -> T? {
+        guard let data = data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+}

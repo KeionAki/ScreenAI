@@ -1,0 +1,21 @@
+import Foundation
+
+setvbuf(stdout, nil, _IONBF, 0)
+
+print("ScreenAI 单元测试")
+testCSV()
+testSSE()
+testHTTP()
+testWebSocket()
+testNetwork()
+testPairing()
+testMessagesAndHotkey()
+testHistory()
+testImageEncoder()
+testRouter()
+testCertificates()
+testRouterCertRoutes()
+testOpenAIParsing()
+testSSELineSplitting()
+print("\n通过 \(T.passes) 项断言，失败 \(T.failures) 项")
+exit(T.failures == 0 ? 0 : 1)

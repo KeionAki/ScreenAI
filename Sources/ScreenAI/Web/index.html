@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ScreenAI">
+<meta name="theme-color" content="#0f1222">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="icon" href="/favicon.ico">
+<link rel="stylesheet" href="/style.css">
+<title>ScreenAI</title>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="status"><span id="statusDot" class="dot"></span><span id="statusText">未连接</span></div>
+    <div class="title">ScreenAI</div>
+    <button id="settingsBtn" class="iconbtn" aria-label="设置">&#9881;</button>
+  </header>
+
+  <main id="viewPair" class="view">
+    <div class="pair-card">
+      <img src="/icon.png" class="logo" alt="">
+      <h1>连接到 Mac</h1>
+      <p class="hint">在 Mac 菜单栏点击「显示验证码」，然后输入 6 位验证码</p>
+      <input id="codeInput" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="000000">
+      <button id="connectBtn" class="primary">连接</button>
+      <p id="pairError" class="error"></p>
+      <p id="installHint" class="hint small hidden">提示：在 Safari 分享菜单中「添加到主屏幕」，可全屏使用。</p>
+      <p id="httpsHint" class="hint small hidden">推荐改用 HTTPS 地址：<a id="httpsLink" href="#"></a><br>安装证书后可保持屏幕常亮并支持离线打开。</p>
+      <p id="certLink" class="hint small hidden"><a href="/screenai-ca.mobileconfig">首次使用：安装 ScreenAI 根证书</a></p>
+    </div>
+  </main>
+
+  <div id="certGuide" class="guide hidden">
+    <div class="guide-body">
+      <h2>需要安装并信任证书</h2>
+      <p>页面已打开，但实时连接被 iPhone 拒绝，通常是因为还没有信任 ScreenAI 的本地根证书。只需做一次：</p>
+      <ol>
+        <li>点下方「下载证书描述文件」，在弹窗中选「允许」。</li>
+        <li>打开「设置」，顶部会出现「已下载描述文件」，点进去选「安装」。</li>
+        <li>进入「设置 › 通用 › 关于本机 › 证书信任设置」，打开「ScreenAI Local CA」的完全信任开关。</li>
+        <li>回到本页点「我已完成，重试连接」。</li>
+      </ol>
+      <a class="primary-link" href="/screenai-ca.mobileconfig">下载证书描述文件</a>
+      <button id="certRetryBtn" class="primary">我已完成，重试连接</button>
+      <button id="certLaterBtn" class="small">稍后再说</button>
+    </div>
+  </div>
+
+  <main id="viewLive" class="view hidden">
+    <div id="liveList" class="list"></div>
+    <div id="liveEmpty" class="empty">等待分析结果…<br><small>在 Mac 上按下快捷键截图</small></div>
+  </main>
+
+  <main id="viewHistory" class="view hidden">
+    <div class="history-bar">
+      <select id="dateSelect"><option value="">最近</option></select>
+      <input id="searchInput" type="search" placeholder="搜索" enterkeyhint="search">
+      <button id="exportBtn" class="small">导出</button>
+    </div>
+    <div id="historyList" class="list"></div>
+    <div id="historyEmpty" class="empty hidden">没有记录</div>
+  </main>
+
+  <nav id="tabs" class="tabs hidden">
+    <button data-view="live" class="tab active"><span class="ico">&#128225;</span>实时消息</button>
+    <button data-view="history" class="tab"><span class="ico">&#128203;</span>历史记录</button>
+  </nav>
+
+  <div id="settingsSheet" class="sheet hidden">
+    <div class="sheet-body">
+      <h2>设置</h2>
+      <label class="row">保留消息条数 <input id="keepInput" type="number" min="10" max="500"></label>
+      <label class="row"><span>新结果提示音</span><input id="soundToggle" type="checkbox"></label>
+      <label class="row"><span>最新消息在最上</span><input id="newestTopToggle" type="checkbox"></label>
+      <label class="row" id="wakeRow"><span>连接时保持屏幕常亮</span><input id="wakeToggle" type="checkbox"></label>
+      <div class="row-btns">
+        <button id="clearLiveBtn" class="small">清空实时消息</button>
+        <button id="unpairBtn" class="small danger">断开并重新配对</button>
+      </div>
+      <p class="hint small" id="aboutLine"></p>
+      <button id="closeSettingsBtn" class="primary">完成</button>
+    </div>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+# 编译产物
+.build/
+build/
+dist/
+*.xcodeproj
+*.xcworkspace
+# 本地测试素材
+test_image.jpeg
+test_image.jpg
+# 系统
+.DS_Store

@@ -1,0 +1,443 @@
+import Foundation
+import Security
+import CoreGraphics
+
+/// 让主队列上的 @Published 镜像更新得以执行
+func pumpMainQueue() {
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+}
+
+func testCSV() {
+    T.run("CSV escape/parse roundtrip") {
+        let fields = ["a", "b,c", "say \"hi\"", "line1\nline2", "", "end"]
+        let line = CSV.line(fields)
+        T.check(line.hasSuffix("\r\n"), "line ends with CRLF")
+        let rows = CSV.parse(line)
+        T.equal(rows.count, 1, "one row")
+        T.equal(rows[0], fields, "fields roundtrip")
+        let multi = CSV.line(["1", "x"]) + CSV.line(["2", "y\r\nz"]) + "3,w"
+        let r2 = CSV.parse(multi)
+        T.equal(r2.count, 3, "three rows incl. unterminated last")
+        T.equal(r2[1][1], "y\r\nz", "embedded CRLF preserved")
+        T.equal(r2[2], ["3", "w"], "last row")
+    }
+}
+
+func testSSE() {
+    T.run("SSE parser") {
+        var p = SSEParser()
+        T.check(p.feed(line: ": comment") == nil, "comment ignored")
+        T.check(p.feed(line: "event: content_block_delta") == nil, "event line buffered")
+        T.check(p.feed(line: "data: {\"a\":1}") == nil, "data line buffered")
+        let ev = p.feed(line: "")
+        T.equal(ev?.event, "content_block_delta", "event name")
+        T.equal(ev?.data, "{\"a\":1}", "data")
+        _ = p.feed(line: "data: one")
+        _ = p.feed(line: "data: two")
+        let ev2 = p.feed(line: "\r")
+        T.equal(ev2?.data, "one\ntwo", "multi-line data joined")
+        T.check(p.feed(line: "") == nil, "empty without data yields nothing")
+        _ = p.feed(line: "data:[DONE]")
+        T.equal(p.flush()?.data, "[DONE]", "flush returns trailing event")
+    }
+}
+
+func testHTTP() {
+    T.run("HTTP parser") {
+        let partial = Data("GET /api/history?date=2026-09-05&q=%E4%BD%A0 HTTP/1.1\r\nHost: x\r\n".utf8)
+        T.check((try? HTTPParser.parse(partial)) == nil || (try! HTTPParser.parse(partial)) == nil, "incomplete returns nil")
+        let full = Data("GET /api/history?date=2026-09-05&q=%E4%BD%A0+%E5%A5%BD HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer abc\r\nConnection: close\r\n\r\nEXTRA".utf8)
+        let (req, consumed) = try HTTPParser.parse(full)!
+        T.equal(req.method, "GET", "method")
+        T.equal(req.path, "/api/history", "path")
+        T.equal(req.query["date"], "2026-09-05", "query date")
+        T.equal(req.query["q"], "你 好", "query decoded with +")
+        T.equal(req.bearerToken, "abc", "bearer")
+        T.check(req.wantsClose, "connection close")
+        T.equal(consumed, full.count - 5, "consumed excludes EXTRA")
+        let post = Data("POST /api/auth HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 17\r\n\r\n{\"code\":\"123456\"}".utf8)
+        let (preq, _) = try HTTPParser.parse(post)!
+        T.equal(preq.jsonBody?["code"] as? String, "123456", "json body")
+        let ws = Data("GET /ws HTTP/1.1\r\nUpgrade: websocket\r\nConnection: keep-alive, Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n".utf8)
+        let (wreq, _) = try HTTPParser.parse(ws)!
+        T.check(wreq.isWebSocketUpgrade, "websocket upgrade detected")
+        let resp = HTTPResponse.json(["ok": true]).serialized(close: false)
+        let text = String(data: resp, encoding: .utf8)!
+        T.check(text.hasPrefix("HTTP/1.1 200 OK\r\n"), "status line")
+        T.check(text.contains("Content-Length: 11\r\n"), "content length")
+        T.check(text.hasSuffix("\r\n\r\n{\"ok\":true}"), "body")
+    }
+}
+
+func testWebSocket() {
+    T.run("WebSocket codec") {
+        T.equal(WebSocketCodec.acceptKey(for: "dGhlIHNhbXBsZSBub25jZQ=="), "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", "RFC 6455 accept key")
+        // 构造客户端带掩码帧
+        func masked(_ payload: [UInt8], opcode: UInt8 = 0x1) -> Data {
+            var d = Data([0x80 | opcode])
+            let n = payload.count
+            if n < 126 { d.append(UInt8(0x80 | n)) }
+            else if n <= 0xFFFF { d.append(0x80 | 126); d.append(UInt8(n >> 8)); d.append(UInt8(n & 0xFF)) }
+            else { d.append(0x80 | 127); for i in (0..<8).reversed() { d.append(UInt8((UInt64(n) >> (UInt64(i) * 8)) & 0xFF)) } }
+            let key: [UInt8] = [0x37, 0xfa, 0x21, 0x3d]
+            d.append(contentsOf: key)
+            d.append(contentsOf: payload.enumerated().map { $0.element ^ key[$0.offset & 3] })
+            return d
+        }
+        let hello = masked(Array("Hello".utf8))
+        T.equal(hello, Data([0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58]), "RFC example frame bytes")
+        let (frame, used) = try WebSocketCodec.decode(hello)!
+        T.equal(String(data: frame.payload, encoding: .utf8), "Hello", "decoded payload")
+        T.equal(used, hello.count, "consumed")
+        T.check(try WebSocketCodec.decode(hello.prefix(7)) == nil, "partial frame nil")
+        let big = masked([UInt8](repeating: 0xAB, count: 70000))
+        let (bf, _) = try WebSocketCodec.decode(big)!
+        T.equal(bf.payload.count, 70000, "64-bit length frame")
+        let mid = masked([UInt8](repeating: 1, count: 300))
+        T.equal(try WebSocketCodec.decode(mid)!.0.payload.count, 300, "16-bit length frame")
+        let unmasked = Data([0x81, 0x05]) + Data("Hello".utf8)
+        var threw = false
+        do { _ = try WebSocketCodec.decode(unmasked) } catch { threw = true }
+        T.check(threw, "unmasked client frame rejected")
+        let out = WebSocketCodec.text("Hi")
+        T.equal(out, Data([0x81, 0x02, 0x48, 0x69]), "server text frame")
+        let close = WebSocketCodec.close(code: 1000, reason: "bye")
+        T.equal(close[0], 0x88, "close opcode")
+        T.equal(close[1], 5, "close length")
+    }
+}
+
+func testNetwork() {
+    T.run("private address detection") {
+        for a in ["192.168.1.5", "10.0.0.1", "172.16.0.1", "172.31.255.255", "127.0.0.1", "::1", "fe80::1%en0", "::ffff:192.168.0.9", "fd12::1", "169.254.1.1"] {
+            T.check(NetworkInfo.isPrivate(address: a), "private: \(a)")
+        }
+        for a in ["8.8.8.8", "172.32.0.1", "11.0.0.1", "2001:db8::1", "::ffff:8.8.8.8", "not-an-ip", "300.1.1.1"] {
+            T.check(!NetworkInfo.isPrivate(address: a), "public: \(a)")
+        }
+    }
+}
+
+func testPairing() {
+    T.run("pairing flow") {
+        let pm = PairingManager()
+        T.check(pm.verify(code: "123456", from: "192.168.1.2").isFailure(.noActiveCode), "no code yet")
+        pm.generateCode()
+        pumpMainQueue()
+        let code = pm.code ?? ""
+        T.equal(code.count, 6, "6-digit code")
+        T.check(code.allSatisfy { $0.isNumber }, "numeric code")
+        let wrong = code == "000000" ? "111111" : "000000"
+        for _ in 0..<4 { T.check(pm.verify(code: wrong, from: "192.168.1.2").isFailure(.mismatch), "mismatch") }
+        T.check(pm.verify(code: wrong, from: "192.168.1.2").isFailure(.tooManyAttempts), "5th wrong attempt invalidates")
+        T.check(pm.verify(code: code, from: "192.168.1.2").isFailure(.noActiveCode), "code gone after too many attempts")
+        pm.generateCode()
+        pumpMainQueue()
+        let code2 = pm.code ?? ""
+        var token = ""
+        switch pm.verify(code: code2, from: "192.168.1.3") {
+        case .success(let s):
+            token = s.token
+            T.equal(s.clientAddress, "192.168.1.3", "client address")
+            T.check(s.expiresAt.timeIntervalSinceNow > 86000, "24h token")
+        case .failure(let e):
+            T.check(false, "expected success, got \(e)")
+        }
+        T.equal(token.count, 64, "hex token")
+        T.check(pm.isValid(token: token), "token valid")
+        T.check(!pm.isValid(token: "nope"), "wrong token invalid")
+        T.check(pm.verify(code: code2, from: "192.168.1.3").isFailure(.noActiveCode), "code single-use")
+        pm.revokeSession()
+        T.check(!pm.isValid(token: token), "revoked")
+        // 限速：同一 IP 一分钟 10 次
+        pm.generateCode()
+        var limited = false
+        for _ in 0..<12 { if pm.verify(code: "999999", from: "10.0.0.7").isFailure(.rateLimited) { limited = true } }
+        T.check(limited, "ip rate limit kicks in")
+    }
+}
+
+extension Result where Success == PairingSession, Failure == PairingError {
+    func isFailure(_ e: PairingError) -> Bool {
+        if case .failure(let f) = self { return f == e }
+        return false
+    }
+}
+
+func testMessagesAndHotkey() {
+    T.run("server message json") {
+        let m = ServerMessage.analysisResult(id: "abc", timestamp: Date(timeIntervalSince1970: 1.5), result: "答案：B", source: "全屏", model: "m", latencyMs: 1234)
+        let obj = JSON.parse(m.json)!
+        T.equal(obj["type"] as? String, "analysis_result", "type")
+        T.equal(obj["timestamp"] as? Int, 1500, "millis")
+        T.equal(obj["result"] as? String, "答案：B", "result")
+        T.equal(obj["latency_ms"] as? Int, 1234, "latency")
+        T.equal(obj["status"] as? String, "success", "status")
+        let e = JSON.parse(ServerMessage.error(id: "1", timestamp: Date(), message: "x", source: nil).json)!
+        T.check(e["capture_source"] == nil, "no source key when nil")
+        T.equal(e["status"] as? String, "error", "error status")
+    }
+    T.run("hotkey display") {
+        T.equal(Hotkey.default.displayString, "⇧⌘A", "default hotkey")
+        let hk = Hotkey(keyCode: 0x7A, carbonModifiers: 4096 | 2048)
+        T.equal(hk.displayString, "⌃⌥F1", "ctrl+opt+F1")
+        let data = try JSONEncoder().encode(hk)
+        T.equal(try JSONDecoder().decode(Hotkey.self, from: data), hk, "codable roundtrip")
+    }
+}
+
+func testHistory() {
+    T.run("history store") {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("screenai-test-\(UUID().uuidString)")
+        let h = HistoryStore(directory: dir)
+        let hash = h.registerPrompt("提示词A")
+        T.equal(hash.count, 12, "prompt hash length")
+        let t1 = Date(timeIntervalSince1970: 1_800_000_000)
+        let r1 = HistoryRecord(id: "1", timestamp: t1, captureSource: "全屏", promptHash: hash, provider: "openai", model: "m", result: "答案,含\"引号\"\n第二行", status: "success", latencyMs: 12)
+        let r2 = HistoryRecord(id: "2", timestamp: t1.addingTimeInterval(60), captureSource: "窗口", promptHash: hash, provider: "openai", model: "m", result: "", status: "error", errorMessage: "超时", latencyMs: 0)
+        h.append(r1); h.append(r2)
+        let dates = h.dates()
+        T.equal(dates.count, 1, "one day file")
+        let recs = h.records(date: dates[0])
+        T.equal(recs.count, 2, "two records")
+        T.equal(recs.first, r1, "record roundtrip with quotes/newline")
+        T.equal(recs.last?.errorMessage, "超时", "error message")
+        T.equal(h.search(query: "答案").count, 1, "search hit")
+        T.equal(h.search(query: "窗口").first?.id, "2", "search by source")
+        let csv = h.exportCSV(dates: dates)
+        T.check(csv.hasPrefix("id,timestamp,capture_source"), "export header")
+        T.equal(CSV.parse(csv).count, 3, "export rows")
+        T.equal(h.prompt(forHash: hash), "提示词A", "prompt lookup")
+        try h.clearAll()
+        T.equal(h.dates().count, 0, "cleared")
+        try? FileManager.default.removeItem(at: dir)
+    }
+}
+
+func testImageEncoder() {
+    T.run("image encoder") {
+        let space = CGColorSpaceCreateDeviceRGB()
+        let ctx = CGContext(data: nil, width: 4000, height: 2000, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+        ctx.setFillColor(CGColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 4000, height: 2000))
+        let img = ctx.makeImage()!
+        let enc = ImageEncoder.encode(img, maxLongEdge: 1600, quality: 0.85)!
+        T.equal(enc.width, 1600, "scaled width")
+        T.equal(enc.height, 800, "scaled height")
+        T.check(enc.byteCount > 500 && enc.byteCount < 200_000, "jpeg size reasonable: \(enc.byteCount)")
+        T.check(enc.base64.hasPrefix("/9j/"), "jpeg base64 magic")
+        let same = ImageEncoder.downscale(img, maxLongEdge: 5000)
+        T.equal(same.width, 4000, "no upscaling")
+        T.check(!WebAssets.icon(size: 64).isEmpty, "icon png generated")
+        T.check(WebAssets.data("index.html") != nil, "web assets found")
+    }
+}
+
+func testRouter() {
+    T.run("router") {
+        let pairing = PairingManager()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("screenai-router-\(UUID().uuidString)")
+        let history = HistoryStore(directory: dir)
+        let hub = WebSocketHub()
+        let router = AppRouter(pairing: pairing, history: history, hub: hub)
+        func get(_ path: String, token: String? = nil) -> HTTPResponse {
+            var headers: [String: String] = [:]
+            if let t = token { headers["authorization"] = "Bearer \(t)" }
+            var p = path; var q: [String: String] = [:]
+            if let i = path.firstIndex(of: "?") { p = String(path[..<i]); for kv in path[path.index(after: i)...].split(separator: "&") { let a = kv.split(separator: "=", maxSplits: 1); q[String(a[0])] = a.count > 1 ? String(a[1]) : "" } }
+            return router.route(HTTPRequest(method: "GET", target: path, path: p, query: q, headers: headers, body: Data()), ip: "192.168.1.9")
+        }
+        T.equal(get("/").status, 200, "index served")
+        T.check(String(data: get("/").body, encoding: .utf8)!.contains("<title>ScreenAI</title>"), "index content")
+        T.equal(get("/app.js").status, 200, "app.js served")
+        T.equal(get("/manifest.json").status, 200, "manifest served")
+        T.equal(get("/icon.png").status, 200, "icon served")
+        T.equal(get("/nope").status, 404, "404")
+        T.equal(get("/api/history/dates").status, 401, "auth required")
+        T.equal(get("/api/history/dates", token: "bad").status, 401, "bad token")
+        pairing.generateCode()
+        pumpMainQueue()
+        let body = Data("{\"code\":\"\(pairing.code!)\"}".utf8)
+        let auth = router.route(HTTPRequest(method: "POST", target: "/api/auth", path: "/api/auth", query: [:], headers: ["content-type": "application/json"], body: body), ip: "192.168.1.9")
+        T.equal(auth.status, 200, "auth ok")
+        let tok = (JSON.parse(auth.body)?["token"] as? String) ?? ""
+        T.equal(tok.count, 64, "token returned")
+        T.equal(get("/api/history/dates", token: tok).status, 200, "authorized")
+        T.equal(get("/api/history?limit=5", token: tok).status, 200, "history ok")
+        T.equal(get("/api/history?date=bad", token: tok).status, 400, "bad date")
+        T.equal(get("/api/history/export", token: tok).status, 200, "export ok")
+        let status = JSON.parse(get("/api/status").body)!
+        T.equal(status["paired"] as? Bool, true, "status paired")
+        let badAuth = router.route(HTTPRequest(method: "POST", target: "/api/auth", path: "/api/auth", query: [:], headers: [:], body: Data("{\"code\":\"000000\"}".utf8)), ip: "192.168.1.9")
+        T.equal(badAuth.status, 401, "wrong code 401")
+        try? FileManager.default.removeItem(at: dir)
+    }
+}
+
+func testCertificates() {
+    T.run("certificate manager") {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("screenai-tls-\(UUID().uuidString)")
+        let cm = CertificateManager(directory: dir)
+        T.check(cm.needsRefresh(hostnames: ["localhost"], ips: ["127.0.0.1"]), "fresh manager needs certs")
+        let hosts = ["localhost", "test-mac.local"]
+        let ips = ["127.0.0.1", "192.168.1.2"]
+        let identity = try cm.ensureIdentity(hostnames: hosts, ips: ips)
+        T.check(cm.hasCA, "CA files exist")
+        T.check(FileManager.default.fileExists(atPath: dir.appendingPathComponent("server.p12").path), "p12 exists")
+        T.equal(cm.caFingerprint?.count, 95, "fingerprint format")
+        let info = cm.serverInfo
+        T.check(info?.sans.contains("IP:192.168.1.2") == true, "SAN has ip")
+        T.check(info?.sans.contains("DNS:test-mac.local") == true, "SAN has host")
+        T.check(!cm.needsRefresh(hostnames: hosts, ips: ips), "no refresh when SANs covered")
+        T.check(cm.needsRefresh(hostnames: hosts, ips: ips + ["10.0.0.5"]), "refresh when new ip")
+        // 身份中的证书应与 server.crt 一致
+        var certRef: SecCertificate?
+        SecIdentityCopyCertificate(identity, &certRef)
+        T.check(certRef != nil, "identity has certificate")
+        if let c = certRef {
+            let summary = SecCertificateCopySubjectSummary(c) as String? ?? ""
+            T.check(summary.contains("ScreenAI"), "certificate subject: \(summary)")
+        }
+        var keyRef: SecKey?
+        T.equal(SecIdentityCopyPrivateKey(identity, &keyRef), errSecSuccess, "identity has private key")
+        // openssl 验证链
+        let verify = Process()
+        verify.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+        verify.arguments = ["verify", "-CAfile", dir.appendingPathComponent("ca.crt.pem").path, dir.appendingPathComponent("server.crt.pem").path]
+        let pipe = Pipe(); verify.standardOutput = pipe; verify.standardError = pipe
+        try verify.run(); let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""; verify.waitUntilExit()
+        T.check(out.contains(": OK"), "chain verifies: \(out.trimmingCharacters(in: .whitespacesAndNewlines))")
+        // SAN 文本
+        let text = Process()
+        text.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+        text.arguments = ["x509", "-in", dir.appendingPathComponent("server.crt.pem").path, "-noout", "-text"]
+        let p2 = Pipe(); text.standardOutput = p2
+        try text.run(); let t = String(data: p2.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""; text.waitUntilExit()
+        T.check(t.contains("IP Address:192.168.1.2"), "x509 SAN ip")
+        T.check(t.contains("DNS:test-mac.local"), "x509 SAN dns")
+        T.check(t.contains("TLS Web Server Authentication"), "EKU serverAuth")
+        T.check(t.contains("CA:FALSE"), "server not CA")
+        // mobileconfig
+        let mc = cm.mobileConfig()!
+        let plist = try PropertyListSerialization.propertyList(from: mc, options: [], format: nil) as! [String: Any]
+        T.equal(plist["PayloadType"] as? String, "Configuration", "profile type")
+        let inner = (plist["PayloadContent"] as! [[String: Any]])[0]
+        T.equal(inner["PayloadType"] as? String, "com.apple.security.root", "root cert payload")
+        T.equal(inner["PayloadContent"] as? Data, cm.caCertificateDER, "payload has DER")
+        T.equal(cm.mobileConfig(), mc, "profile deterministic")
+        // 重新签发后证书变化，根不变
+        let fp1 = cm.caFingerprint
+        let id2 = try cm.regenerateServer(hostnames: hosts, ips: ips + ["10.0.0.5"])
+        var c2: SecCertificate?; SecIdentityCopyCertificate(id2, &c2)
+        T.check(c2 != nil && certRef != nil && SecCertificateCopyData(c2!) as Data != SecCertificateCopyData(certRef!) as Data, "server cert reissued")
+        T.equal(cm.caFingerprint, fp1, "CA unchanged after reissue")
+        T.check(cm.serverInfo?.sans.contains("IP:10.0.0.5") == true, "new SAN present")
+        try? FileManager.default.removeItem(at: dir)
+    }
+}
+
+func testRouterCertRoutes() {
+    T.run("router certificate routes") {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("screenai-tls2-\(UUID().uuidString)")
+        let cm = CertificateManager(directory: dir)
+        _ = try cm.ensureIdentity(hostnames: ["localhost"], ips: ["127.0.0.1"])
+        let router = AppRouter(pairing: PairingManager(), history: HistoryStore(directory: dir.appendingPathComponent("h")), hub: WebSocketHub())
+        func get(_ path: String) -> HTTPResponse {
+            router.route(HTTPRequest(method: "GET", target: path, path: path, query: [:], headers: [:], body: Data()), ip: "192.168.1.9")
+        }
+        T.equal(get("/screenai-ca.mobileconfig").status, 404, "no certs → 404")
+        router.certificates = cm
+        let mc = get("/screenai-ca.mobileconfig")
+        T.equal(mc.status, 200, "mobileconfig 200")
+        T.check(mc.headers.contains { $0.0 == "Content-Type" && $0.1 == "application/x-apple-aspen-config" }, "mobileconfig content type")
+        T.equal(get("/ca.crt").body, cm.caCertificateDER, "ca.crt is DER")
+        let sw = get("/sw.js")
+        T.equal(sw.status, 200, "sw.js 200")
+        let swText = String(data: sw.body, encoding: .utf8) ?? ""
+        T.check(!swText.contains("__VERSION__") && swText.contains(AppRouter.version), "sw version injected")
+        T.check(sw.headers.contains { $0.0 == "Service-Worker-Allowed" }, "sw header")
+        let status = JSON.parse(get("/api/status").body)!
+        T.equal((status["cert_fingerprint"] as? String)?.count, 95, "status fingerprint")
+        try? FileManager.default.removeItem(at: dir)
+    }
+}
+
+func testOpenAIParsing() {
+    T.run("openai stream/completion parsing") {
+        let chunk = JSON.parse(#"{"choices":[{"delta":{"reasoning_content":"先看题","content":""},"finish_reason":null}]}"#)!
+        let ev = try OpenAIProvider.events(fromChunk: chunk)
+        T.equal(ev.count, 1, "reasoning only")
+        if case .reasoning(let r) = ev[0] { T.equal(r, "先看题", "reasoning text") } else { T.check(false, "expected reasoning") }
+        let chunk2 = JSON.parse(#"{"choices":[{"delta":{"content":"答案 B"},"finish_reason":"length"}]}"#)!
+        let ev2 = try OpenAIProvider.events(fromChunk: chunk2)
+        T.equal(ev2.count, 2, "text + finish")
+        if case .text(let t) = ev2[0] { T.equal(t, "答案 B", "text delta") } else { T.check(false, "expected text") }
+        if case .finished(let reason) = ev2[1] { T.equal(reason, "length", "finish reason") } else { T.check(false, "expected finished") }
+        var threw = false
+        do { _ = try OpenAIProvider.events(fromChunk: JSON.parse(#"{"error":{"message":"boom"}}"#)!) } catch { threw = true }
+        T.check(threw, "error chunk throws")
+        let completion = JSON.parse(#"{"choices":[{"message":{"role":"assistant","content":"","reasoning_content":"思考思考"},"finish_reason":"length"}]}"#)!
+        let parsed = try OpenAIProvider.parseCompletion(completion)
+        T.equal(parsed.text, "", "empty content")
+        T.equal(parsed.reasoning, "思考思考", "reasoning content")
+        T.equal(parsed.finishReason, "length", "completion finish reason")
+        let custom = OpenAIProvider.thinkingParameters(.disabled, kind: .custom)
+        T.equal((custom["thinking"] as? [String: String])?["type"], "disabled", "custom disabled → thinking.type")
+        let low = OpenAIProvider.thinkingParameters(.low, kind: .custom)
+        T.equal(low["reasoning_effort"] as? String, "low", "custom low effort")
+        T.equal(OpenAIProvider.thinkingParameters(.default, kind: .custom).isEmpty, true, "default sends nothing")
+        T.equal(OpenAIProvider.thinkingParameters(.max, kind: .openai)["reasoning_effort"] as? String, "high", "openai max → high")
+        T.check(OpenAIProvider.thinkingParameters(.disabled, kind: .openai)["thinking"] == nil, "openai never sends thinking")
+        let msg = JSON.parse(ServerMessage.analysisThinking(id: "x", chars: 42).json)!
+        T.equal(msg["type"] as? String, "analysis_thinking", "thinking message type")
+        T.equal(msg["chars"] as? Int, 42, "thinking chars")
+    }
+}
+
+func testSSELineSplitting() {
+    T.run("sse byte line splitting keeps blank lines") {
+        let raw = "data: {\"a\":1}\n\ndata: {\"b\":2}\r\n\r\nevent: x\ndata: y\n\ndata: [DONE]\n"
+        let stream = AsyncStream<UInt8> { c in
+            for b in raw.utf8 { c.yield(b) }
+            c.finish()
+        }
+        let sem = DispatchSemaphore(value: 0)
+        final class Box { var lines: [String] = []; var events: [SSEEvent] = [] }
+        let box = Box()
+        Task.detached {
+            var parser = SSEParser()
+            try? await AIHTTP.forEachLine(stream) { line in
+                box.lines.append(line)
+                if let ev = parser.feed(line: line) { box.events.append(ev) }
+            }
+            if let ev = parser.flush() { box.events.append(ev) }
+            sem.signal()
+        }
+        _ = sem.wait(timeout: .now() + 5)
+        let lines = box.lines, events = box.events
+        T.equal(lines, ["data: {\"a\":1}", "", "data: {\"b\":2}", "", "event: x", "data: y", "", "data: [DONE]"], "lines incl. blanks, CRLF stripped")
+        T.equal(events.count, 4, "four SSE events")
+        T.equal(events.first?.data, "{\"a\":1}", "first event data")
+        T.equal(events[2].event, "x", "event name")
+        T.equal(events.last?.data, "[DONE]", "done event")
+        // 模拟 DeepSeek 真实片段：思考 → 正文 → stop
+        let chunks = [
+            #"{"choices":[{"delta":{"content":null,"reasoning_content":"用户"},"finish_reason":null}]}"#,
+            #"{"choices":[{"delta":{"content":"B","reasoning_content":null},"finish_reason":null}]}"#,
+            #"{"choices":[{"delta":{"content":"","reasoning_content":null},"finish_reason":"stop"}]}"#,
+        ]
+        var text = "", reasoning = 0, finish: String? = nil
+        for c in chunks {
+            for e in try OpenAIProvider.events(fromChunk: JSON.parse(c)!) {
+                switch e {
+                case .text(let t): text += t
+                case .reasoning(let r): reasoning += r.count
+                case .finished(let f): finish = f
+                }
+            }
+        }
+        T.equal(text, "B", "deepseek content parsed")
+        T.equal(reasoning, 2, "reasoning counted")
+        T.equal(finish, "stop", "finish stop")
+    }
+}
