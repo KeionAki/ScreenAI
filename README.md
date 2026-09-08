@@ -11,7 +11,7 @@ ScreenAI 是一个运行在 macOS 菜单栏的小工具：按一次全局快捷�
 - **零依赖、无需 Xcode**：纯 Swift 加 Network.framework 手写 HTTP/WebSocket，仅用 Command Line Tools 即可构建。
 - **隐私**：API Key 存钥匙串，截图只在内存中处理，不落盘。
 
-详细设计见 [DESIGN.md](DESIGN.md)。
+详细设计见 [DESIGN.md](DESIGN.md)。本项目以 [MIT 许可证](LICENSE) 开源。
 
 ---
 
@@ -26,7 +26,7 @@ ScreenAI is a macOS menu‑bar utility: press a global hotkey to capture the scr
 - **Zero dependencies, no Xcode required** – pure Swift with a hand‑written HTTP/WebSocket server on Network.framework; builds with Command Line Tools only.
 - **Privacy** – API keys live in the Keychain; screenshots are processed in memory and never written to disk.
 
-Requirements: macOS 13+, Swift 5.8+ Command Line Tools; iPhone with Safari on the same Wi‑Fi. Build with `scripts/build-app.sh`, then `open dist/ScreenAI.app`. The rest of this document is in Chinese; see [DESIGN.md](DESIGN.md) for the architecture.
+Requirements: macOS 13+, Swift 5.8+ Command Line Tools; iPhone with Safari on the same Wi‑Fi. Build with `scripts/build-app.sh`, then `open dist/ScreenAI.app`. The rest of this document is in Chinese; see [DESIGN.md](DESIGN.md) for the architecture. Licensed under the [MIT License](LICENSE).
 
 ---
 
