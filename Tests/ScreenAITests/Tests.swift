@@ -381,13 +381,6 @@ func testOpenAIParsing() {
         T.equal(parsed.text, "", "empty content")
         T.equal(parsed.reasoning, "思考思考", "reasoning content")
         T.equal(parsed.finishReason, "length", "completion finish reason")
-        let custom = OpenAIProvider.thinkingParameters(.disabled, kind: .custom)
-        T.equal((custom["thinking"] as? [String: String])?["type"], "disabled", "custom disabled → thinking.type")
-        let low = OpenAIProvider.thinkingParameters(.low, kind: .custom)
-        T.equal(low["reasoning_effort"] as? String, "low", "custom low effort")
-        T.equal(OpenAIProvider.thinkingParameters(.default, kind: .custom).isEmpty, true, "default sends nothing")
-        T.equal(OpenAIProvider.thinkingParameters(.max, kind: .openai)["reasoning_effort"] as? String, "high", "openai max → high")
-        T.check(OpenAIProvider.thinkingParameters(.disabled, kind: .openai)["thinking"] == nil, "openai never sends thinking")
         let msg = JSON.parse(ServerMessage.analysisThinking(id: "x", chars: 42).json)!
         T.equal(msg["type"] as? String, "analysis_thinking", "thinking message type")
         T.equal(msg["chars"] as? Int, 42, "thinking chars")
@@ -439,5 +432,99 @@ func testSSELineSplitting() {
         T.equal(text, "B", "deepseek content parsed")
         T.equal(reasoning, 2, "reasoning counted")
         T.equal(finish, "stop", "finish stop")
+    }
+}
+
+
+func testVendorRequestBodies() {
+    T.run("vendor request bodies") {
+        var p = ProviderParams()
+        p.maxTokens = 4096
+        p.temperature = 0.7
+        p.topP = 0.9
+        p.thinking = "disabled"
+        p.reasoningEffort = "max"
+        p.imageDetail = "original"
+        let content: [[String: Any]] = [["type": "text", "text": "hi"]]
+
+        // Kimi：不发送采样参数，用 max_completion_tokens；k2.6 thinking.type
+        let kimi = OpenAIProvider.requestBody(kind: .kimi, model: "kimi-k2.6", content: content, stream: true, params: p)
+        T.check(kimi["temperature"] == nil && kimi["top_p"] == nil, "kimi never sends sampling params")
+        T.equal(kimi["max_completion_tokens"] as? Int, 4096, "kimi max_completion_tokens")
+        T.check(kimi["max_tokens"] == nil, "kimi no max_tokens")
+        T.equal((kimi["thinking"] as? [String: Any])?["type"] as? String, "disabled", "kimi k2.6 thinking disabled")
+        T.check(kimi["reasoning_effort"] == nil, "kimi k2.6 no reasoning_effort")
+        // K3：reasoning_effort，不发 thinking
+        let k3 = OpenAIProvider.requestBody(kind: .kimi, model: "kimi-k3", content: content, stream: false, params: p)
+        T.equal(k3["reasoning_effort"] as? String, "max", "k3 effort")
+        T.check(k3["thinking"] == nil, "k3 no thinking param")
+        // K2.7-code：只有 keep 时发送固定值
+        var pk = p; pk.thinkingKeep = true
+        let k27 = OpenAIProvider.requestBody(kind: .kimi, model: "kimi-k2.7-code", content: content, stream: false, params: pk)
+        T.equal((k27["thinking"] as? [String: Any])?["keep"] as? String, "all", "k2.7 keep all")
+        T.equal((k27["thinking"] as? [String: Any])?["type"] as? String, "enabled", "k2.7 type enabled")
+        // Kimi 图片不带 detail
+        let kimiImg = OpenAIProvider.imagePart(kind: .kimi, mimeType: "image/jpeg", base64: "AAA", params: p)
+        T.check(((kimiImg["image_url"] as? [String: Any])?["detail"]) == nil, "kimi image no detail")
+
+        // DeepSeek：max_tokens、thinking.type、reasoning_effort、采样、detail original
+        let ds = OpenAIProvider.requestBody(kind: .deepseek, model: "deepseek-flash", content: content, stream: true, params: p)
+        T.equal(ds["max_tokens"] as? Int, 4096, "deepseek max_tokens")
+        T.equal((ds["thinking"] as? [String: Any])?["type"] as? String, "disabled", "deepseek thinking")
+        T.equal(ds["reasoning_effort"] as? String, "max", "deepseek effort")
+        T.equal(ds["temperature"] as? Double, 0.7, "deepseek temperature sent")
+        T.equal(ds["top_p"] as? Double, 0.9, "deepseek top_p sent")
+        let dsImg = OpenAIProvider.imagePart(kind: .deepseek, mimeType: "image/jpeg", base64: "AAA", params: p)
+        T.equal((dsImg["image_url"] as? [String: Any])?["detail"] as? String, "original", "deepseek detail original")
+        var pn = ProviderParams(); pn.reasoningEffort = "none"
+        T.equal(OpenAIProvider.requestBody(kind: .deepseek, model: "deepseek-flash", content: content, stream: false, params: pn)["reasoning_effort"] as? String, "none", "deepseek effort none")
+
+        // OpenAI：max_completion_tokens，effort 映射，detail original→high，无 thinking
+        let oa = OpenAIProvider.requestBody(kind: .openai, model: "gpt-5", content: content, stream: false, params: p)
+        T.equal(oa["max_completion_tokens"] as? Int, 4096, "openai max_completion_tokens")
+        T.equal(oa["reasoning_effort"] as? String, "minimal", "openai thinking disabled → minimal")
+        T.check(oa["thinking"] == nil, "openai no thinking object")
+        let oaImg = OpenAIProvider.imagePart(kind: .openai, mimeType: "image/jpeg", base64: "AAA", params: p)
+        T.equal((oaImg["image_url"] as? [String: Any])?["detail"] as? String, "high", "openai original→high")
+
+        // 默认参数：什么都不额外发送
+        let d = ProviderParams.defaults(for: .deepseek)
+        let dsDefault = OpenAIProvider.requestBody(kind: .deepseek, model: "deepseek-flash", content: content, stream: true, params: d)
+        T.check(dsDefault["thinking"] == nil && dsDefault["reasoning_effort"] == nil && dsDefault["temperature"] == nil, "deepseek defaults send nothing extra")
+        T.equal(ProviderParams.defaults(for: .kimi).maxTokens, 16000, "kimi default max tokens")
+
+        // 自定义：字段名、额外 JSON 合并
+        var pc = ProviderParams(); pc.maxTokensField = "max_completion_tokens"; pc.extraJSON = "{\"stop\": [\"###\"], \"foo\": 1}"; pc.thinking = "enabled"; pc.reasoningEffort = "low"
+        T.check(pc.extraJSONIsValid, "extra json valid")
+        let cu = OpenAIProvider.requestBody(kind: .custom, model: "m", content: content, stream: false, params: pc)
+        T.equal(cu["max_completion_tokens"] as? Int, 8192, "custom field name")
+        T.equal(cu["foo"] as? Int, 1, "extra json merged")
+        T.equal((cu["stop"] as? [String])?.first, "###", "extra stop merged")
+        T.equal(cu["reasoning_effort"] as? String, "low", "custom effort raw")
+        pc.extraJSON = "[1,2]"; T.check(!pc.extraJSONIsValid, "array is not a valid extra object")
+        pc.extraJSON = "not json"; T.check(!pc.extraJSONIsValid, "garbage invalid")
+
+        // Anthropic / Gemini
+        var pa = ProviderParams(); pa.thinking = "adaptive"; pa.reasoningEffort = "medium"
+        let an = AnthropicProvider.requestBody(model: "claude-opus-5", content: content, stream: false, params: pa)
+        T.equal((an["thinking"] as? [String: Any])?["type"] as? String, "adaptive", "anthropic adaptive")
+        T.equal((an["output_config"] as? [String: Any])?["effort"] as? String, "medium", "anthropic effort")
+        T.check(an["temperature"] == nil, "anthropic no temperature by default")
+        var pg = ProviderParams(); pg.reasoningEffort = "high"; pg.temperature = 0.5
+        let g3 = GeminiProvider.requestBody(model: "gemini-3-pro-preview", parts: [["text": "hi"]], params: pg)
+        let gen3 = g3["generationConfig"] as? [String: Any]
+        T.equal((gen3?["thinkingConfig"] as? [String: Any])?["thinkingLevel"] as? String, "high", "gemini 3 thinkingLevel")
+        T.equal(gen3?["temperature"] as? Double, 0.5, "gemini temperature")
+        let g25 = GeminiProvider.requestBody(model: "gemini-2.5-flash", parts: [["text": "hi"]], params: pg)
+        T.equal(((g25["generationConfig"] as? [String: Any])?["thinkingConfig"] as? [String: Any])?["thinkingBudget"] as? Int, 24576, "gemini 2.5 budget")
+        pg.thinking = "disabled"
+        let g25off = GeminiProvider.requestBody(model: "gemini-2.5-flash", parts: [["text": "hi"]], params: pg)
+        T.equal(((g25off["generationConfig"] as? [String: Any])?["thinkingConfig"] as? [String: Any])?["thinkingBudget"] as? Int, 0, "gemini disabled → budget 0")
+
+        // ProviderParams 兼容解码（缺字段）
+        let decoded = try JSONDecoder().decode(ProviderParams.self, from: Data("{\"maxTokens\": 123}".utf8))
+        T.equal(decoded.maxTokens, 123, "partial decode maxTokens")
+        T.equal(decoded.thinking, "default", "partial decode default thinking")
+        T.check(decoded.temperature == nil, "partial decode nil temperature")
     }
 }

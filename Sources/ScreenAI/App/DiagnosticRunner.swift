@@ -39,7 +39,9 @@ enum DiagnosticRunner {
         let kind = settings.apiProvider
         let apiKey = settings.apiKey(for: kind)
         let config = ProviderConfig(kind: kind, apiKey: apiKey, endpoint: settings.currentEndpoint)
-        log("配置: provider=\(kind.rawValue) endpoint=\(settings.currentEndpoint.isEmpty ? "(默认)" : settings.currentEndpoint) model=\(settings.currentModel) stream=\(stream) thinking=\(settings.thinkingMode.rawValue) detail=\(settings.imageDetail) maxTokens=\(settings.maxTokens) timeout=\(Int(settings.apiTimeout))s apiKey=\(apiKey.isEmpty ? "未设置" : "已设置(\(apiKey.count) 字符)")")
+        let params = settings.params(for: kind)
+        log("配置: provider=\(kind.rawValue) endpoint=\(settings.currentEndpoint.isEmpty ? "(默认)" : settings.currentEndpoint) model=\(settings.currentModel) stream=\(stream) timeout=\(Int(settings.apiTimeout))s apiKey=\(apiKey.isEmpty ? "未设置" : "已设置(\(apiKey.count) 字符)")")
+        log("参数: maxTokens=\(params.maxTokens) thinking=\(params.thinking) effort=\(params.reasoningEffort) temperature=\(params.temperature.map { String($0) } ?? "不发送") top_p=\(params.topP.map { String($0) } ?? "不发送") detail=\(params.imageDetail)\(kind == .custom && !params.extraJSON.isEmpty ? " extra=\(params.extraJSON.truncated(80))" : "")")
         let prompt = promptOverride ?? settings.promptTemplate
         log("提示词: \(prompt.truncated(80))")
 
@@ -49,8 +51,7 @@ enum DiagnosticRunner {
 
         let provider = AIProviderFactory.make(config)
         let request = AIRequest(imageBase64: encoded.base64, prompt: prompt, model: settings.currentModel,
-                                maxTokens: settings.maxTokens, timeout: settings.apiTimeout, stream: stream,
-                                thinking: settings.thinkingMode, imageDetail: settings.imageDetail == "auto" ? nil : settings.imageDetail)
+                                timeout: settings.apiTimeout, stream: stream, params: params)
 
         let done = DispatchSemaphore(value: 0)
         final class Box { var code: Int32 = 0 }

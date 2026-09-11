@@ -63,7 +63,14 @@
 - Gemini：`:streamGenerateContent?alt=sse`，`x-goog-api-key` 头，`inline_data`。
 - 不发送 `temperature`（新模型会拒绝）；`max_tokens` 可配置，默认 8192（思考模型的思考内容计入上限）。
 - 流事件 `AIStreamEvent`：`text` / `reasoning` / `finished(reason)`。`reasoning_content` 不展示，只用于「思考中… N 字」进度；`finish_reason == length` 且正文为空时报「输出被截断」，仅有思考内容时报「只返回了思考内容」。
-- 思考模式设置（OpenAI / 自定义）：默认不发参数；OpenAI 发 `reasoning_effort`，兼容端点（DeepSeek）发 `thinking.type` + `reasoning_effort`。可选 `image_url.detail`。
+- 厂商种类：openai / anthropic / gemini / deepseek / kimi / custom；后四者中 deepseek、kimi、custom 与 openai 共用 Chat Completions 协议实现，但请求体按厂商组装（`OpenAIProvider.requestBody`）。
+- 参数按厂商独立保存（`ProviderParams`：maxTokens / temperature? / topP? / thinking / thinkingKeep / reasoningEffort / imageDetail / maxTokensField / extraJSON），设置面板 `VendorParamsView` 只显示该厂商支持的项：
+  - DeepSeek：`max_tokens`、`thinking.type`、`reasoning_effort`（none/low/high/max）、`temperature`/`top_p`（思考模式无效）、`detail`（low/high/original）；penalty 已废弃不发。
+  - Kimi：`max_completion_tokens`；k2.6 `thinking.type`，k2.7-code 仅 `{enabled, keep: all}`，k3 `reasoning_effort`（low/high/max）；采样参数为固定值一律不发；图片无 `detail`。
+  - OpenAI：`max_completion_tokens`、`reasoning_effort`（minimal…high）、`temperature`（可选）、`detail`（original 映射为 high）。
+  - Anthropic：`max_tokens`、`thinking`（adaptive/disabled）、`output_config.effort`。Gemini：`maxOutputTokens`、`thinkingLevel`（3 系列）/`thinkingBudget`（2.5 系列）、`temperature`、`topP`。
+  - 自定义：输出上限字段名可选，通用 thinking/effort/采样/detail，额外 JSON 字段合并进请求体。
+- 迁移：旧全局 maxTokens/thinkingMode/imageDetail 种子化到各厂商；「自定义」端点指向 deepseek.com / moonshot 时自动迁移为对应厂商并搬运 Key 与模型名。
 - SSE 读取必须自行按字节切行并保留空行：Foundation 的 `AsyncLineSequence` 会吞掉空行，而 SSE 以空行分隔事件，使用它会把整条流粘成一个不可解析的块（v1.1 初版的「模型未返回内容」即由此导致）。
 - 诊断模式：`ScreenAI --analyze-image <图片> [--raw] [--no-stream] [--prompt …]`，走与快捷键相同的编码与调用路径，逐行打印事件。
 - 流式请求若收到非 `text/event-stream` 响应（服务端忽略 stream），自动按普通 JSON 解析；SSE 无任何事件时记录响应片段到日志。

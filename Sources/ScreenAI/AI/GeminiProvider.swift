@@ -35,10 +35,23 @@ struct GeminiProvider: AIProvider {
         return AIHTTP.mapStatus(status, message: msg, model: model)
     }
 
-    private func body(parts: [[String: Any]], maxTokens: Int) -> [String: Any] {
-        [
+    static func requestBody(model: String, parts: [[String: Any]], params: ProviderParams, maxTokensOverride: Int? = nil) -> [String: Any] {
+        var gen: [String: Any] = ["maxOutputTokens": maxTokensOverride ?? params.maxTokens]
+        if let t = params.temperature { gen["temperature"] = t }
+        if let tp = params.topP { gen["topP"] = tp }
+        let effort = params.thinking == "disabled" ? "none" : params.reasoningEffort
+        if effort != "default" {
+            if model.lowercased().contains("gemini-3") {
+                let map = ["none": "low", "minimal": "low", "low": "low", "medium": "medium", "high": "high", "max": "high"]
+                if let l = map[effort] { gen["thinkingConfig"] = ["thinkingLevel": l] }
+            } else {
+                let map = ["none": 0, "minimal": 512, "low": 1024, "medium": 8192, "high": 24576, "max": 32768]
+                if let budget = map[effort] { gen["thinkingConfig"] = ["thinkingBudget": budget] }
+            }
+        }
+        return [
             "contents": [["role": "user", "parts": parts] as [String: Any]],
-            "generationConfig": ["maxOutputTokens": maxTokens],
+            "generationConfig": gen,
         ]
     }
 
@@ -64,7 +77,7 @@ struct GeminiProvider: AIProvider {
             ]
             let method = request.stream ? "streamGenerateContent" : "generateContent"
             let req = try AIHTTP.request(url: try url(model: request.model, method: method, stream: request.stream), headers: headers,
-                                         body: body(parts: parts, maxTokens: request.maxTokens), timeout: request.timeout)
+                                         body: GeminiProvider.requestBody(model: request.model, parts: parts, params: request.params), timeout: request.timeout)
             if request.stream {
                 try await AIHTTP.sse(req, mapError: { mapError($0, $1, model: request.model) }, onNonStream: { data in
                     guard let obj = JSON.parse(data) else { throw AIError.badResponse(String(data: data.prefix(300), encoding: .utf8) ?? "") }
@@ -93,11 +106,11 @@ struct GeminiProvider: AIProvider {
         }
     }
 
-    func testConnection(model: String, timeout: TimeInterval, thinking: ThinkingMode) async throws -> AITestResult {
+    func testConnection(model: String, timeout: TimeInterval, params: ProviderParams) async throws -> AITestResult {
         guard !config.apiKey.isEmpty else { throw AIError.missingAPIKey }
         guard !model.isEmpty else { throw AIError.missingModel }
         let req = try AIHTTP.request(url: try url(model: model, method: "generateContent", stream: false), headers: headers,
-                                     body: body(parts: [["text": "请只回复 OK"]], maxTokens: 256), timeout: timeout)
+                                     body: GeminiProvider.requestBody(model: model, parts: [["text": "请只回复 OK"]], params: params, maxTokensOverride: min(params.maxTokens, 2048)), timeout: timeout)
         let obj = try await AIHTTP.json(req, mapError: { mapError($0, $1, model: model) })
         return AITestResult(text: try GeminiProvider.extractText(obj), reasoningChars: 0)
     }

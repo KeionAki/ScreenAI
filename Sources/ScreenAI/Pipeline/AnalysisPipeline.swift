@@ -8,13 +8,11 @@ struct AnalysisConfig {
     var endpoint: String
     var model: String
     var prompt: String
-    var maxTokens: Int
     var timeout: TimeInterval
     var stream: Bool
     var maxLongEdge: Int
     var jpegQuality: Double
-    var thinking: ThinkingMode
-    var imageDetail: String?
+    var params: ProviderParams
 
     var providerConfig: ProviderConfig { ProviderConfig(kind: providerKind, apiKey: apiKey, endpoint: endpoint) }
 }
@@ -149,13 +147,11 @@ final class AnalysisPipeline {
             endpoint: settings.currentEndpoint,
             model: settings.currentModel,
             prompt: settings.promptTemplate,
-            maxTokens: settings.maxTokens,
             timeout: settings.apiTimeout,
             stream: settings.streamingEnabled,
             maxLongEdge: settings.maxImageLongEdge,
             jpegQuality: settings.jpegQuality,
-            thinking: settings.thinkingMode,
-            imageDetail: settings.imageDetail == "auto" ? nil : settings.imageDetail
+            params: settings.currentParams
         )
     }
 
@@ -202,8 +198,7 @@ final class AnalysisPipeline {
             do {
                 let provider = AIProviderFactory.make(job.config.providerConfig)
                 let request = AIRequest(imageBase64: encoded.base64, prompt: job.config.prompt, model: job.config.model,
-                                        maxTokens: job.config.maxTokens, timeout: job.config.timeout, stream: job.config.stream,
-                                        thinking: job.config.thinking, imageDetail: job.config.imageDetail)
+                                        timeout: job.config.timeout, stream: job.config.stream, params: job.config.params)
                 for try await event in provider.analyze(request) {
                     switch event {
                     case .text(let delta):
@@ -222,7 +217,7 @@ final class AnalysisPipeline {
                 let text = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
                 let latency = Int(Date().timeIntervalSince(start) * 1000)
                 if text.isEmpty {
-                    let hint = "请在 API 设置中增大「最大输出 tokens」（当前 \(job.config.maxTokens)），或把「思考模式」设为关闭/低"
+                    let hint = "请在 API 设置中增大「最大输出 tokens」（当前 \(job.config.params.maxTokens)），或关闭/降低思考"
                     if finishReason == "length" {
                         throw AIError.emptyResponse("输出被截断：达到最大输出 tokens，思考内容也计入其中。\(hint)")
                     } else if reasoningChars > 0 {

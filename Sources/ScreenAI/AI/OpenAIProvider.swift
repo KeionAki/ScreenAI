@@ -31,36 +31,68 @@ struct OpenAIProvider: AIProvider {
         ["Authorization": "Bearer \(config.apiKey)"]
     }
 
-    /// 思考模式参数：OpenAI 官方用 reasoning_effort；兼容端点（DeepSeek 等）用 thinking + reasoning_effort
-    static func thinkingParameters(_ mode: ThinkingMode, kind: AIProviderKind) -> [String: Any] {
-        var p: [String: Any] = [:]
-        switch (kind, mode) {
-        case (_, .default):
-            break
-        case (.openai, .disabled): p["reasoning_effort"] = "minimal"
-        case (.openai, .low): p["reasoning_effort"] = "low"
-        case (.openai, .high), (.openai, .max): p["reasoning_effort"] = "high"
-        case (_, .disabled): p["thinking"] = ["type": "disabled"]
-        case (_, .low): p["thinking"] = ["type": "enabled"]; p["reasoning_effort"] = "low"
-        case (_, .high): p["thinking"] = ["type": "enabled"]; p["reasoning_effort"] = "high"
-        case (_, .max): p["thinking"] = ["type": "enabled"]; p["reasoning_effort"] = "max"
-        }
-        return p
-    }
-
-    private func body(model: String, content: [[String: Any]], maxTokens: Int, stream: Bool, thinking: ThinkingMode) -> [String: Any] {
+    /// 按厂商组装请求体：不同厂商支持的字段与取值不同，不支持的一律不发送（Kimi 传采样参数会直接报错）。
+    static func requestBody(kind: AIProviderKind, model: String, content: [[String: Any]], stream: Bool, params: ProviderParams, maxTokensOverride: Int? = nil) -> [String: Any] {
         var b: [String: Any] = [
             "model": model,
             "messages": [["role": "user", "content": content] as [String: Any]],
             "stream": stream,
         ]
-        if config.kind == .openai {
+        let maxTokens = maxTokensOverride ?? params.maxTokens
+        switch kind {
+        case .openai, .kimi:
             b["max_completion_tokens"] = maxTokens
-        } else {
+        case .custom:
+            b[params.maxTokensField == "max_completion_tokens" ? "max_completion_tokens" : "max_tokens"] = maxTokens
+        default:
             b["max_tokens"] = maxTokens
         }
-        for (k, v) in OpenAIProvider.thinkingParameters(thinking, kind: config.kind) { b[k] = v }
+        // 采样参数：Kimi 为固定值，传入即报错
+        if kind != .kimi {
+            if let t = params.temperature { b["temperature"] = t }
+            if let tp = params.topP { b["top_p"] = tp }
+        }
+        let effort = params.reasoningEffort
+        let thinking = params.thinking
+        switch kind {
+        case .openai:
+            let map = ["none": "minimal", "minimal": "minimal", "low": "low", "medium": "medium", "high": "high", "max": "high"]
+            if thinking == "disabled" { b["reasoning_effort"] = "minimal" }
+            else if let e = map[effort] { b["reasoning_effort"] = e }
+        case .deepseek:
+            if thinking == "enabled" || thinking == "disabled" { b["thinking"] = ["type": thinking] }
+            let map = ["none": "none", "minimal": "low", "low": "low", "medium": "high", "high": "high", "max": "max"]
+            if let e = map[effort] { b["reasoning_effort"] = e }
+        case .kimi:
+            let m = model.lowercased()
+            if m.hasPrefix("kimi-k3") {
+                let map = ["none": "low", "minimal": "low", "low": "low", "medium": "high", "high": "high", "max": "max"]
+                if let e = map[effort] { b["reasoning_effort"] = e }
+            } else if m.contains("k2.7") {
+                if params.thinkingKeep { b["thinking"] = ["type": "enabled", "keep": "all"] }
+            } else {
+                var t: [String: Any] = [:]
+                if thinking == "enabled" || thinking == "disabled" { t["type"] = thinking }
+                if params.thinkingKeep && thinking != "disabled" { t["type"] = t["type"] ?? "enabled"; t["keep"] = "all" }
+                if !t.isEmpty { b["thinking"] = t }
+            }
+        case .custom:
+            if thinking == "enabled" || thinking == "disabled" { b["thinking"] = ["type": thinking] }
+            if effort != "default" { b["reasoning_effort"] = effort }
+            if let extra = params.extraObject { for (k, v) in extra { b[k] = v } }
+        default:
+            break
+        }
         return b
+    }
+
+    /// 图片块：Kimi 不支持 detail；OpenAI 没有 original
+    static func imagePart(kind: AIProviderKind, mimeType: String, base64: String, params: ProviderParams) -> [String: Any] {
+        var imageURL: [String: Any] = ["url": "data:\(mimeType);base64,\(base64)"]
+        var detail = params.imageDetail
+        if kind == .openai && detail == "original" { detail = "high" }
+        if kind != .kimi && detail != "auto" && !detail.isEmpty { imageURL["detail"] = detail }
+        return ["type": "image_url", "image_url": imageURL]
     }
 
     private func mapError(_ status: Int, _ raw: String, model: String) -> AIError {
@@ -105,14 +137,13 @@ struct OpenAIProvider: AIProvider {
         AIHTTP.streamTask { emit in
             guard !config.apiKey.isEmpty || config.kind == .custom else { throw AIError.missingAPIKey }
             guard !request.model.isEmpty else { throw AIError.missingModel }
-            var imageURL: [String: Any] = ["url": "data:\(request.mimeType);base64,\(request.imageBase64)"]
-            if let d = request.imageDetail { imageURL["detail"] = d }
+            if config.kind == .custom && !request.params.extraJSONIsValid { throw AIError.badResponse("额外参数不是合法的 JSON 对象") }
             let content: [[String: Any]] = [
+                OpenAIProvider.imagePart(kind: config.kind, mimeType: request.mimeType, base64: request.imageBase64, params: request.params),
                 ["type": "text", "text": request.prompt],
-                ["type": "image_url", "image_url": imageURL],
             ]
             let req = try AIHTTP.request(url: try chatURL(), headers: headers,
-                                         body: body(model: request.model, content: content, maxTokens: request.maxTokens, stream: request.stream, thinking: request.thinking),
+                                         body: OpenAIProvider.requestBody(kind: config.kind, model: request.model, content: content, stream: request.stream, params: request.params),
                                          timeout: request.timeout)
             if request.stream {
                 try await AIHTTP.sse(req, mapError: { mapError($0, $1, model: request.model) }, onNonStream: { data in
@@ -142,11 +173,12 @@ struct OpenAIProvider: AIProvider {
         }
     }
 
-    func testConnection(model: String, timeout: TimeInterval, thinking: ThinkingMode) async throws -> AITestResult {
+    func testConnection(model: String, timeout: TimeInterval, params: ProviderParams) async throws -> AITestResult {
         guard !model.isEmpty else { throw AIError.missingModel }
         let content: [[String: Any]] = [["type": "text", "text": "请只回复 OK"]]
         let req = try AIHTTP.request(url: try chatURL(), headers: headers,
-                                     body: body(model: model, content: content, maxTokens: 1024, stream: false, thinking: thinking), timeout: timeout)
+                                     body: OpenAIProvider.requestBody(kind: config.kind, model: model, content: content, stream: false, params: params, maxTokensOverride: min(params.maxTokens, 4096)),
+                                     timeout: timeout)
         let obj = try await AIHTTP.json(req, mapError: { mapError($0, $1, model: model) })
         let parsed = try OpenAIProvider.parseCompletion(obj)
         return AITestResult(text: parsed.text, reasoningChars: parsed.reasoning.count)

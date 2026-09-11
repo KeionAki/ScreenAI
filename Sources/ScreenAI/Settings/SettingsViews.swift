@@ -32,7 +32,7 @@ struct APISettingsView: View {
                     Text("填写 OpenAI 兼容接口的基础地址，程序会自动追加 /chat/completions").font(.caption).foregroundColor(.secondary)
                 }
                 HStack {
-                    TextField("模型名称", text: modelBinding, prompt: Text(settings.apiProvider.defaultModel))
+                    TextField("模型名称", text: modelBinding, prompt: Text(settings.apiProvider.defaultModel.isEmpty ? "模型名称" : settings.apiProvider.defaultModel))
                     if !models.isEmpty {
                         Menu("选择") {
                             ForEach(models, id: \.self) { m in Button(m) { settings.currentModel = m } }
@@ -40,6 +40,7 @@ struct APISettingsView: View {
                     }
                     Button(loadingModels ? "拉取中…" : "拉取模型列表") { fetchModels() }.disabled(loadingModels)
                 }
+                Text("常用模型：\(settings.apiProvider.modelHint)").font(.caption).foregroundColor(.secondary)
                 SecureKeyField(title: "API Key", value: $apiKey)
                     .onChange(of: apiKey) { settings.setAPIKey($0, for: settings.apiProvider) }
                 HStack {
@@ -58,34 +59,19 @@ struct APISettingsView: View {
                     Text("\(settings.promptTemplate.count) 字").font(.caption).foregroundColor(.secondary)
                 }
             }
-            Section("请求参数") {
-                LabeledContent("超时时间（秒）") {
-                    TextField("", value: $settings.apiTimeout, format: .number).frame(width: 80)
-                }
-                LabeledContent("最大输出 tokens") {
-                    TextField("", value: $settings.maxTokens, format: .number).frame(width: 80)
-                }
+            Section("请求参数 · \(settings.apiProvider.displayName)") {
                 Toggle("流式输出（答案逐字出现）", isOn: $settings.streamingEnabled)
-                if settings.apiProvider == .openai || settings.apiProvider == .custom {
-                    Picker("思考模式", selection: $settings.thinkingMode) {
-                        ForEach(ThinkingMode.allCases) { Text($0.displayName).tag($0) }
-                    }
-                    Text("DeepSeek、OpenAI 推理模型适用。思考内容计入「最大输出 tokens」，默认开启时建议上限 ≥ 8192；关闭思考可大幅缩短等待。")
-                        .font(.caption).foregroundColor(.secondary)
-                    Picker("图片细节（image_url.detail）", selection: $settings.imageDetail) {
-                        Text("不发送（模型默认）").tag("auto")
-                        Text("low（缩至 512，最省）").tag("low")
-                        Text("high（原始分辨率）").tag("high")
-                    }
-                }
+                VendorParamsView(settings: settings, kind: settings.apiProvider, model: settings.currentModel)
+            }
+            Section("截图") {
                 LabeledContent("截图最长边（像素）") {
                     TextField("", value: $settings.maxImageLongEdge, format: .number).frame(width: 80)
                 }
-                Text("多数模型会把图片缩到约 800–1600 像素当量再识别，全屏截图上的小字可能不可读；识别题目时建议用「指定区域」或「指定窗口」只截题目部分。")
-                    .font(.caption).foregroundColor(.secondary)
                 LabeledContent("JPEG 质量 \(String(format: "%.2f", settings.jpegQuality))") {
                     Slider(value: $settings.jpegQuality, in: 0.3...1.0, step: 0.05).frame(width: 180)
                 }
+                Text("多数模型会把图片缩到约 800–1600 像素当量再识别，全屏截图上的小字可能不可读；识别题目时建议用「指定区域」或「指定窗口」只截题目部分。")
+                    .font(.caption).foregroundColor(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -107,10 +93,10 @@ struct APISettingsView: View {
         let provider = currentProvider()
         let model = settings.currentModel
         let timeout = min(60, settings.apiTimeout)
-        let thinking = settings.thinkingMode
+        let params = settings.currentParams
         Task { @MainActor in
             do {
-                let r = try await provider.testConnection(model: model, timeout: timeout, thinking: thinking)
+                let r = try await provider.testConnection(model: model, timeout: timeout, params: params)
                 if !r.text.isEmpty {
                     testResult = "成功：模型回复「\(r.text.truncated(60))」"
                 } else if r.reasoningChars > 0 {

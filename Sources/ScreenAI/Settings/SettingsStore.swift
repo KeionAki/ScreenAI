@@ -21,12 +21,11 @@ final class SettingsStore: ObservableObject {
     @Published var customEndpoint: String { didSet { d.set(customEndpoint, forKey: "customEndpoint") } }
     @Published var promptTemplate: String { didSet { d.set(promptTemplate, forKey: "promptTemplate") } }
     @Published var apiTimeout: Double { didSet { d.set(apiTimeout, forKey: "apiTimeout") } }
-    @Published var maxTokens: Int { didSet { d.set(maxTokens, forKey: "maxTokens") } }
     @Published var streamingEnabled: Bool { didSet { d.set(streamingEnabled, forKey: "streamingEnabled") } }
     @Published var maxImageLongEdge: Int { didSet { d.set(maxImageLongEdge, forKey: "maxImageLongEdge") } }
     @Published var jpegQuality: Double { didSet { d.set(jpegQuality, forKey: "jpegQuality") } }
-    @Published var thinkingMode: ThinkingMode { didSet { d.set(thinkingMode.rawValue, forKey: "thinkingMode") } }
-    @Published var imageDetail: String { didSet { d.set(imageDetail, forKey: "imageDetail") } }   // auto / low / high
+    /// 各厂商独立的请求参数
+    @Published var paramsByProvider: [String: ProviderParams] { didSet { d.setCodable(paramsByProvider, forKey: "paramsByProvider") } }
 
     // MARK: Capture
     @Published var captureScope: CaptureScope { didSet { d.set(captureScope.rawValue, forKey: "captureScope") } }
@@ -62,12 +61,10 @@ final class SettingsStore: ObservableObject {
         customEndpoint = d.string(forKey: "customEndpoint") ?? ""
         promptTemplate = d.string(forKey: "promptTemplate") ?? SettingsStore.defaultPrompt
         apiTimeout = d.object(forKey: "apiTimeout") as? Double ?? 60
-        maxTokens = d.object(forKey: "maxTokens") as? Int ?? 8192
         streamingEnabled = d.object(forKey: "streamingEnabled") as? Bool ?? true
         maxImageLongEdge = d.object(forKey: "maxImageLongEdge") as? Int ?? 1600
         jpegQuality = d.object(forKey: "jpegQuality") as? Double ?? 0.85
-        thinkingMode = ThinkingMode(rawValue: d.string(forKey: "thinkingMode") ?? "") ?? .default
-        imageDetail = d.string(forKey: "imageDetail") ?? "auto"
+        paramsByProvider = d.codable([String: ProviderParams].self, forKey: "paramsByProvider") ?? [:]
 
         captureScope = CaptureScope(rawValue: d.string(forKey: "captureScope") ?? "") ?? .fullScreen
         selectedDisplayID = UInt32(clamping: d.integer(forKey: "selectedDisplayID"))
@@ -89,6 +86,60 @@ final class SettingsStore: ObservableObject {
         listenPort = d.object(forKey: "listenPort") as? Int ?? 8899
         addressMode = d.string(forKey: "addressMode") ?? "hostname"
         historyDirectory = d.string(forKey: "historyDirectory") ?? SettingsStore.defaultHistoryDirectory.path
+        migrateIfNeeded()
+    }
+
+    /// 旧版本（全局 maxTokens / thinkingMode / imageDetail，DeepSeek、Kimi 走「自定义」）→ 按厂商参数
+    private func migrateIfNeeded() {
+        guard !d.bool(forKey: "migratedProviderParamsV2") else { return }
+        if paramsByProvider.isEmpty {
+            let oldMax = d.object(forKey: "maxTokens") as? Int
+            let oldThinking = d.string(forKey: "thinkingMode") ?? "default"
+            let oldDetail = d.string(forKey: "imageDetail") ?? "auto"
+            var map: [String: ProviderParams] = [:]
+            for kind in AIProviderKind.allCases {
+                var p = ProviderParams.defaults(for: kind)
+                if let m = oldMax { p.maxTokens = max(m, kind == .kimi ? 16000 : m) }
+                switch oldThinking {
+                case "disabled": p.thinking = "disabled"
+                case "low", "high", "max": p.reasoningEffort = oldThinking
+                default: break
+                }
+                if oldDetail != "auto" { p.imageDetail = oldDetail }
+                map[kind.rawValue] = p
+            }
+            paramsByProvider = map
+        }
+        // 自定义端点指向 DeepSeek / Kimi 时迁移为专用厂商，并搬运 API Key 与模型名
+        let ep = customEndpoint.lowercased()
+        var target: AIProviderKind?
+        if ep.contains("deepseek.com") { target = .deepseek }
+        else if ep.contains("moonshot.cn") || ep.contains("moonshot.ai") || ep.contains("kimi.com") { target = .kimi }
+        if let t = target, apiProvider == .custom {
+            if let key = KeychainStore.read(account: AIProviderKind.custom.rawValue), !key.isEmpty, (KeychainStore.read(account: t.rawValue) ?? "").isEmpty {
+                KeychainStore.write(account: t.rawValue, value: key)
+            }
+            var model = modelByProvider[AIProviderKind.custom.rawValue] ?? ""
+            if t == .deepseek, model == "deepseek-v4-flash-vision-exp" { model = "deepseek-flash" }
+            if !model.isEmpty { modelByProvider[t.rawValue] = model }
+            apiProvider = t
+        }
+        d.set(true, forKey: "migratedProviderParamsV2")
+    }
+
+    // MARK: 厂商参数
+
+    func params(for kind: AIProviderKind) -> ProviderParams {
+        paramsByProvider[kind.rawValue] ?? ProviderParams.defaults(for: kind)
+    }
+
+    func setParams(_ p: ProviderParams, for kind: AIProviderKind) {
+        paramsByProvider[kind.rawValue] = p
+    }
+
+    var currentParams: ProviderParams {
+        get { params(for: apiProvider) }
+        set { setParams(newValue, for: apiProvider) }
     }
 
     // MARK: Derived

@@ -35,13 +35,23 @@ struct AnthropicProvider: AIProvider {
         return AIHTTP.mapStatus(status, message: msg, model: model)
     }
 
-    private func body(model: String, content: [[String: Any]], maxTokens: Int, stream: Bool) -> [String: Any] {
-        [
+    static func requestBody(model: String, content: [[String: Any]], stream: Bool, params: ProviderParams, maxTokensOverride: Int? = nil) -> [String: Any] {
+        var b: [String: Any] = [
             "model": model,
-            "max_tokens": maxTokens,
+            "max_tokens": maxTokensOverride ?? params.maxTokens,
             "stream": stream,
             "messages": [["role": "user", "content": content] as [String: Any]],
         ]
+        if let t = params.temperature { b["temperature"] = t }
+        if let tp = params.topP { b["top_p"] = tp }
+        switch params.thinking {
+        case "adaptive", "enabled": b["thinking"] = ["type": "adaptive"]
+        case "disabled": b["thinking"] = ["type": "disabled"]
+        default: break
+        }
+        let map = ["none": "low", "minimal": "low", "low": "low", "medium": "medium", "high": "high", "max": "max"]
+        if let e = map[params.reasoningEffort] { b["output_config"] = ["effort": e] }
+        return b
     }
 
     func analyze(_ request: AIRequest) -> AsyncThrowingStream<AIStreamEvent, Error> {
@@ -53,7 +63,7 @@ struct AnthropicProvider: AIProvider {
                 ["type": "text", "text": request.prompt],
             ]
             let req = try AIHTTP.request(url: try url("/v1/messages"), headers: headers,
-                                         body: body(model: request.model, content: content, maxTokens: request.maxTokens, stream: request.stream),
+                                         body: AnthropicProvider.requestBody(model: request.model, content: content, stream: request.stream, params: request.params),
                                          timeout: request.timeout)
             if request.stream {
                 var stopReason: String?
@@ -109,12 +119,12 @@ struct AnthropicProvider: AIProvider {
         return content.filter { $0["type"] as? String == "text" }.compactMap { $0["text"] as? String }.joined()
     }
 
-    func testConnection(model: String, timeout: TimeInterval, thinking: ThinkingMode) async throws -> AITestResult {
+    func testConnection(model: String, timeout: TimeInterval, params: ProviderParams) async throws -> AITestResult {
         guard !config.apiKey.isEmpty else { throw AIError.missingAPIKey }
         guard !model.isEmpty else { throw AIError.missingModel }
         let content: [[String: Any]] = [["type": "text", "text": "请只回复 OK"]]
         let req = try AIHTTP.request(url: try url("/v1/messages"), headers: headers,
-                                     body: body(model: model, content: content, maxTokens: 256, stream: false), timeout: timeout)
+                                     body: AnthropicProvider.requestBody(model: model, content: content, stream: false, params: params, maxTokensOverride: min(params.maxTokens, 2048)), timeout: timeout)
         let obj = try await AIHTTP.json(req, mapError: { mapError($0, $1, model: model) })
         return AITestResult(text: try AnthropicProvider.extractText(obj), reasoningChars: 0)
     }

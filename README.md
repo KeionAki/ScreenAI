@@ -89,7 +89,7 @@ scripts/make-cert.sh
 
 | 页签 | 要做的事 |
 |---|---|
-| API 配置 | 选择提供商（OpenAI / Anthropic / Gemini / 自定义 OpenAI 兼容），填写模型名与 API Key，点「测试连接」确认可用。API Key 保存在钥匙串。按住 Key 输入框右侧的眼睛图标可临时显示明文。 |
+| API 配置 | 选择提供商（OpenAI / Anthropic / Gemini / DeepSeek / Kimi / 自定义 OpenAI 兼容），填写模型名与 API Key，点「测试连接」确认可用。API Key 保存在钥匙串。「请求参数」区域会随厂商切换，只显示该厂商支持的参数，每个厂商的参数独立保存。 |
 | 捕获设置 | 授予「屏幕录制」权限：点「申请权限」，在系统设置中勾选 ScreenAI，然后点「重新启动 ScreenAI」。选择捕获范围，录制全局快捷键（默认 ⌘⇧A）。 |
 | 连接设置 | 查看 iPhone 访问地址与服务器状态，通常无需改动。 |
 
@@ -118,11 +118,20 @@ scripts/make-cert.sh
 - **暂停使用**：菜单栏「停止捕获」后快捷键不再响应，再点「启动捕获」恢复。
 - **换网络**：Mac 的 IP 变化后重新扫一次二维码即可，证书会自动重新签发，手机不用重装。
 
-### 5. 使用 DeepSeek 等思考模型
+### 5. 各厂商的请求参数
 
-- 提供商选「自定义（OpenAI 兼容）」，端点填 `https://api.deepseek.com`，模型填 `deepseek-v4-flash-vision-exp`。
-- DeepSeek 默认开启思考，思考内容计入「最大输出 tokens」。建议上限 ≥ 8192，或在 API 设置的「思考模式」中选「关闭」以缩短等待。正文为空时应用会明确提示原因。
-- 模型会把图片缩到约 800×800 像素当量再识别，全屏截图上的小字会不可读，请用「指定区域」或「指定窗口」只截题目。
+「API 配置 › 请求参数」按厂商显示不同的选项，未显示的参数一律不会发送：
+
+| 厂商 | 端点 | 可调参数 | 说明 |
+|---|---|---|---|
+| DeepSeek | `https://api.deepseek.com` | `max_tokens`、`thinking.type`、`reasoning_effort`（none/low/high/max）、`temperature`、`top_p`、`image_url.detail`（low/high/original） | 模型 `deepseek-flash` 支持图片，`deepseek-v4-pro` 不支持。思考默认开启且计入输出上限，建议 ≥ 8192；思考模式下 temperature 无效。图片会缩到约 1300×1300 当量。 |
+| Kimi | `https://api.moonshot.cn/v1` | `max_completion_tokens`、`thinking.type`（仅 k2.6 可关）、`thinking.keep`、`reasoning_effort`（仅 k3：low/high/max） | temperature、top_p、n、penalty 为固定值，传入会报错，因此不发送；图片不支持 detail，分辨率 ≤ 4K；思考模式建议输出上限 ≥ 16000。 |
+| OpenAI | `https://api.openai.com/v1` | `max_completion_tokens`、`reasoning_effort`（minimal/low/medium/high）、`temperature`（仅非推理模型）、`image_url.detail`（low/high） | |
+| Anthropic | `https://api.anthropic.com` | `max_tokens`、`thinking`（adaptive/disabled）、`output_config.effort`、`temperature`（仅旧模型） | |
+| Gemini | `https://generativelanguage.googleapis.com` | `maxOutputTokens`、`thinkingConfig`（3 系列 thinkingLevel，2.5 系列 thinkingBudget）、`temperature`、`topP` | |
+| 自定义 | 任意 OpenAI 兼容端点 | 输出上限字段名可选、`thinking`、`reasoning_effort`、`temperature`、`top_p`、`detail`，以及「额外请求体字段」JSON | 额外字段会合并进请求体，可填 `stop`、`response_format` 等。 |
+
+旧版本把 DeepSeek / Kimi 配置在「自定义」里的用户，升级后会自动迁移为对应厂商，API Key 与模型名一并搬运；已下线的 `deepseek-v4-flash-vision-exp` 会改为 `deepseek-flash`。
 
 ### 6. 关于访问地址
 
@@ -160,4 +169,4 @@ log stream --predicate 'subsystem == "com.li.screenai"' --level info
 - **手机打不开页面**：确认同一 Wi‑Fi、Mac 防火墙允许 ScreenAI、地址中端口正确；路由器开启「AP 隔离」时局域网设备互不可见。
 - **快捷键无效**：可能与系统或其他应用冲突，在捕获设置中重新录制。
 - **模型拒绝或报错**：错误信息会显示在字幕与手机端，并记录到 CSV 的 `error_message` 列。
-- **提示「模型未返回内容」或「只返回了思考内容」**：增大「最大输出 tokens」或把「思考模式」设为关闭/低；若服务端忽略流式参数，应用会自动按普通 JSON 解析。
+- **提示「模型未返回内容」或「只返回了思考内容」**：在该厂商的请求参数里增大「最大输出 tokens」，或关闭/降低思考；若服务端忽略流式参数，应用会自动按普通 JSON 解析。

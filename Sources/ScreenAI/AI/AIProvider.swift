@@ -1,31 +1,13 @@
 import Foundation
 
-/// 思考（推理）模式：DeepSeek / OpenAI 推理模型适用；其他提供商忽略。
-enum ThinkingMode: String, CaseIterable, Codable, Identifiable {
-    case `default`, disabled, low, high, max
-    var id: String { rawValue }
-    var displayName: String {
-        switch self {
-        case .default: return "跟随模型默认"
-        case .disabled: return "关闭（最快）"
-        case .low: return "低"
-        case .high: return "高"
-        case .max: return "最大"
-        }
-    }
-}
-
 struct AIRequest {
     var imageBase64: String
     var mimeType: String = "image/jpeg"
     var prompt: String
     var model: String
-    var maxTokens: Int
     var timeout: TimeInterval
     var stream: Bool
-    var thinking: ThinkingMode = .default
-    /// OpenAI 兼容接口的 image_url.detail（nil 表示不发送）
-    var imageDetail: String? = nil
+    var params: ProviderParams
 }
 
 /// 模型输出流事件
@@ -44,7 +26,7 @@ protocol AIProvider {
     var kind: AIProviderKind { get }
     /// 产出流事件；非流式模式下一次给出全文。
     func analyze(_ request: AIRequest) -> AsyncThrowingStream<AIStreamEvent, Error>
-    func testConnection(model: String, timeout: TimeInterval, thinking: ThinkingMode) async throws -> AITestResult
+    func testConnection(model: String, timeout: TimeInterval, params: ProviderParams) async throws -> AITestResult
     func listModels(timeout: TimeInterval) async throws -> [String]
 }
 
@@ -57,7 +39,7 @@ struct ProviderConfig {
 enum AIProviderFactory {
     static func make(_ config: ProviderConfig) -> AIProvider {
         switch config.kind {
-        case .openai, .custom: return OpenAIProvider(config: config)
+        case .openai, .custom, .deepseek, .kimi: return OpenAIProvider(config: config)
         case .anthropic: return AnthropicProvider(config: config)
         case .gemini: return GeminiProvider(config: config)
         }
