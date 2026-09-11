@@ -26,7 +26,6 @@ struct CaptionView: View {
         .padding(10)
         .frame(width: settings.captionWidth, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(settings.captionOpacity)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white, lineWidth: 1))
     }
 
     private var header: some View {
