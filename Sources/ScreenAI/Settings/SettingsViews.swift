@@ -320,7 +320,7 @@ struct DisplaySettingsView: View {
                 }
                 Stepper("保留条数：\(settings.captionHistoryCount)", value: $settings.captionHistoryCount, in: 1...20)
                 LabeledContent("窗口宽度 \(Int(settings.captionWidth)) pt") {
-                    Slider(value: $settings.captionWidth, in: 260...800, step: 10).frame(width: 200)
+                    Slider(value: $settings.captionWidth, in: 100...800, step: 10).frame(width: 200)
                 }
                 Button("重置窗口位置") { state.captionPanel.resetPosition() }
             }
