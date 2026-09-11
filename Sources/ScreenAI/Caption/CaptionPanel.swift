@@ -23,7 +23,7 @@ final class CaptionPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false   // 系统阴影在浅色背景上会显示为一圈深色"边框"
         panel.isMovableByWindowBackground = true
         panel.sharingType = .none
         panel.hidesOnDeactivate = false
