@@ -16,7 +16,7 @@ struct CaptionView: View {
             if model.entries.isEmpty {
                 Text("按 \(settings.hotkey.displayString) 截图并分析")
                     .font(.system(size: settings.captionFontSize - 1))
-                    .foregroundColor(.white.opacity(0.6))
+                    .foregroundColor(.black.opacity(0.55))
                     .padding(.vertical, 4)
             }
             ForEach(Array(model.entries.prefix(settings.captionHistoryCount).enumerated()), id: \.element.id) { index, entry in
@@ -25,24 +25,24 @@ struct CaptionView: View {
         }
         .padding(10)
         .frame(width: settings.captionWidth, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.82 * settings.captionOpacity)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12 * settings.captionOpacity), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(settings.captionOpacity)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white, lineWidth: 1))
     }
 
     private var header: some View {
         HStack(spacing: 6) {
             Circle().fill(model.phoneConnected ? Color.green : Color.gray).frame(width: 7, height: 7)
-            Text("ScreenAI").font(.system(size: 11, weight: .semibold)).foregroundColor(.white.opacity(0.7))
+            Text("ScreenAI").font(.system(size: 11, weight: .semibold)).foregroundColor(.black.opacity(0.6))
             Spacer()
             if settings.captionMode == .marquee {
                 Button(action: { model.isPaused.toggle() }) {
                     Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
                 }
-                .buttonStyle(.plain).foregroundColor(.white.opacity(0.7))
+                .buttonStyle(.plain).foregroundColor(.black.opacity(0.6))
                 .help(model.isPaused ? "继续滚动" : "暂停滚动")
             }
             Button(action: { model.clear() }) { Image(systemName: "trash") }
-                .buttonStyle(.plain).foregroundColor(.white.opacity(0.7)).help("清空")
+                .buttonStyle(.plain).foregroundColor(.black.opacity(0.6)).help("清空")
         }
     }
 
@@ -58,16 +58,16 @@ struct CaptionView: View {
                 Spacer(minLength: 0)
             }
             .font(.system(size: max(9, size - 3)))
-            .foregroundColor(.white.opacity(0.6))
+            .foregroundColor(.black.opacity(0.5))
 
             if entry.kind == .pending && entry.text.isEmpty {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text(entry.note.isEmpty ? "分析中…" : entry.note).font(.system(size: size)).foregroundColor(.white.opacity(0.8))
+                    Text(entry.note.isEmpty ? "分析中…" : entry.note).font(.system(size: size)).foregroundColor(.black.opacity(0.75))
                 }
             } else if index == 0 && settings.captionMode == .marquee && entry.kind == .success {
                 MarqueeText(text: entry.text, font: .system(size: size, weight: .medium), paused: model.isPaused)
-                    .foregroundColor(.white)
+                    .foregroundColor(.black)
                     .frame(height: size * 1.5)
             } else {
                 Text(entry.text)
@@ -79,7 +79,7 @@ struct CaptionView: View {
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 6)
-        .background(index == 0 && entry.kind != .status ? RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.10)) : nil)
+        .background(index == 0 && entry.kind != .status ? RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.06)) : nil)
         .opacity(opacity)
     }
 
@@ -96,9 +96,9 @@ struct CaptionView: View {
 
     private func color(for kind: CaptionEntry.Kind) -> Color {
         switch kind {
-        case .error: return Color(red: 1, green: 0.5, blue: 0.5)
-        case .status: return Color(red: 1, green: 0.75, blue: 0.4)
-        default: return .white
+        case .error: return Color(red: 0.80, green: 0.12, blue: 0.12)
+        case .status: return Color(red: 0.80, green: 0.45, blue: 0.0)
+        default: return .black
         }
     }
 }
