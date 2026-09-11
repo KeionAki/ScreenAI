@@ -55,7 +55,6 @@ struct CaptionView: View {
             HStack(spacing: 6) {
                 icon(for: entry.kind)
                 Text(CaptionView.timeFormatter.string(from: entry.time))
-                if !entry.source.isEmpty { Text(entry.source.truncated(28)) }
                 Spacer(minLength: 0)
             }
             .font(.system(size: max(9, size - 3)))
