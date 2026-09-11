@@ -207,11 +207,27 @@ struct CaptureSettingsView: View {
                 }
             }
             Section("全局快捷键") {
+                Picker("快捷键类型", selection: $settings.hotkeyMode) {
+                    Text("组合键（含 ⌘/⌃/⌥）").tag("combo")
+                    Text("单键（如 F5）").tag("single")
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: settings.hotkeyMode) { mode in
+                    if mode == "single", !settings.hotkey.isSingleKey { settings.hotkey = .defaultSingle }
+                    if mode == "combo", settings.hotkey.isSingleKey { settings.hotkey = .default }
+                }
                 HStack {
                     Text("捕获快捷键")
                     Spacer()
-                    HotkeyRecorderView(hotkey: $settings.hotkey).frame(width: 160, height: 24)
-                    Button("恢复默认") { settings.hotkey = .default }
+                    HotkeyRecorderView(hotkey: $settings.hotkey, allowSingleKey: settings.hotkeyMode == "single").frame(width: 160, height: 24)
+                    Button("恢复默认") { settings.hotkey = settings.hotkeyMode == "single" ? .defaultSingle : .default }
+                }
+                if settings.hotkeyMode == "single" {
+                    Text("点击输入框后按下一个按键即可。推荐 F1–F19 或数字小键盘；Mac 键盘的 F 键默认是亮度、音量等媒体键，需按住 fn 再按，或在「系统设置 › 键盘 › 键盘快捷键 › 功能键」中开启「将 F1、F2 等键用作标准功能键」。空格、回车、Tab、删除、Esc 不能作为单键。")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                if let warning = settings.hotkey.singleKeyWarning {
+                    Text(warning).font(.caption).foregroundColor(.orange)
                 }
                 if let err = state.hotkeyError {
                     Text(err).font(.caption).foregroundColor(.red)

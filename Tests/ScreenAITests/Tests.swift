@@ -183,6 +183,12 @@ func testMessagesAndHotkey() {
         T.equal(hk.displayString, "⌃⌥F1", "ctrl+opt+F1")
         let data = try JSONEncoder().encode(hk)
         T.equal(try JSONDecoder().decode(Hotkey.self, from: data), hk, "codable roundtrip")
+        T.equal(Hotkey.defaultSingle.displayString, "F5", "single key display")
+        T.check(Hotkey.defaultSingle.isSingleKey && !Hotkey.default.isSingleKey, "isSingleKey")
+        T.check(Hotkey.defaultSingle.singleKeyWarning == nil, "F5 no warning")
+        let letter = Hotkey(keyCode: 0, carbonModifiers: 0)
+        T.check(letter.singleKeyWarning != nil, "single letter warns")
+        T.check(Hotkey.forbiddenSingleKeys.contains(49), "space forbidden as single key")
     }
 }
 

@@ -4,22 +4,26 @@ import AppKit
 /// 快捷键录制控件：点击后按下组合键即完成录制，Esc 取消。
 struct HotkeyRecorderView: NSViewRepresentable {
     @Binding var hotkey: Hotkey
+    var allowSingleKey: Bool = false
 
     func makeNSView(context: Context) -> HotkeyRecorderNSView {
         let v = HotkeyRecorderNSView()
         v.onCapture = { hk in hotkey = hk }
         v.display = hotkey.displayString
+        v.allowSingleKey = allowSingleKey
         return v
     }
 
     func updateNSView(_ nsView: HotkeyRecorderNSView, context: Context) {
         nsView.display = hotkey.displayString
+        nsView.allowSingleKey = allowSingleKey
         nsView.needsDisplay = true
     }
 }
 
 final class HotkeyRecorderNSView: NSView {
     var onCapture: ((Hotkey) -> Void)?
+    var allowSingleKey = false
     var display: String = "" { didSet { needsDisplay = true } }
     private var recording = false { didSet { needsDisplay = true } }
 
@@ -58,7 +62,7 @@ final class HotkeyRecorderNSView: NSView {
             window?.makeFirstResponder(nil)
             return
         }
-        if let hk = Hotkey(event: event) {
+        if let hk = Hotkey(event: event, allowSingleKey: allowSingleKey) {
             onCapture?(hk)
             recording = false
             window?.makeFirstResponder(nil)
@@ -74,7 +78,7 @@ final class HotkeyRecorderNSView: NSView {
         path.fill()
         (recording ? NSColor.controlAccentColor : NSColor.separatorColor).setStroke()
         path.stroke()
-        let text = recording ? "请按下组合键…（Esc 取消）" : display
+        let text = recording ? (allowSingleKey ? "请按下一个按键…（Esc 取消）" : "请按下组合键…（Esc 取消）") : display
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 12, weight: recording ? .regular : .semibold),
             .foregroundColor: recording ? NSColor.secondaryLabelColor : NSColor.labelColor,

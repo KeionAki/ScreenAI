@@ -38,6 +38,8 @@ final class SettingsStore: ObservableObject {
     @Published var debounceMs: Int { didSet { d.set(debounceMs, forKey: "debounceMs") } }
     @Published var captureEnabled: Bool { didSet { d.set(captureEnabled, forKey: "captureEnabled") } }
     @Published var hotkey: Hotkey { didSet { d.setCodable(hotkey, forKey: "hotkey") } }
+    /// 快捷键类型："combo"（组合键）或 "single"（单键）
+    @Published var hotkeyMode: String { didSet { d.set(hotkeyMode, forKey: "hotkeyMode") } }
 
     // MARK: Caption
     @Published var captionMode: CaptionMode { didSet { d.set(captionMode.rawValue, forKey: "captionMode") } }
@@ -76,6 +78,7 @@ final class SettingsStore: ObservableObject {
         debounceMs = d.object(forKey: "debounceMs") as? Int ?? 300
         captureEnabled = d.object(forKey: "captureEnabled") as? Bool ?? true
         hotkey = d.codable(Hotkey.self, forKey: "hotkey") ?? Hotkey.default
+        hotkeyMode = d.string(forKey: "hotkeyMode") ?? "combo"
 
         captionMode = CaptionMode(rawValue: d.string(forKey: "captionMode") ?? "") ?? .staticList
         captionOpacity = d.object(forKey: "captionOpacity") as? Double ?? 0.9

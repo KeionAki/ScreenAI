@@ -8,25 +8,51 @@ struct Hotkey: Codable, Equatable {
     var carbonModifiers: UInt32
 
     static let `default` = Hotkey(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: UInt32(cmdKey | shiftKey))
+    /// 单键模式的默认值：F5
+    static let defaultSingle = Hotkey(keyCode: UInt32(kVK_F5), carbonModifiers: 0)
+
+    /// 单键模式下禁止使用的键（会让系统无法正常输入或操作）
+    static let forbiddenSingleKeys: Set<Int> = [kVK_Space, kVK_Return, kVK_Tab, kVK_Delete, kVK_ForwardDelete, kVK_Escape, kVK_ANSI_KeypadEnter]
 
     init(keyCode: UInt32, carbonModifiers: UInt32) {
         self.keyCode = keyCode
         self.carbonModifiers = carbonModifiers
     }
 
-    init?(event: NSEvent) {
+    /// 从按键事件构造；allowSingleKey 为 true 时允许没有修饰键的单键。
+    init?(event: NSEvent, allowSingleKey: Bool = false) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         var mods: UInt32 = 0
         if flags.contains(.command) { mods |= UInt32(cmdKey) }
         if flags.contains(.shift) { mods |= UInt32(shiftKey) }
         if flags.contains(.option) { mods |= UInt32(optionKey) }
         if flags.contains(.control) { mods |= UInt32(controlKey) }
-        // 至少需要 ⌘ / ⌃ / ⌥ 之一，避免劫持普通按键
-        guard mods & UInt32(cmdKey | optionKey | controlKey) != 0 else { return nil }
         let code = UInt32(event.keyCode)
         guard Hotkey.keyName(code) != nil else { return nil }
+        let hasPrimaryModifier = mods & UInt32(cmdKey | optionKey | controlKey) != 0
+        if allowSingleKey {
+            // 单键模式：不带修饰键（Shift 也不带），且不能是功能性按键
+            guard mods == 0, !Hotkey.forbiddenSingleKeys.contains(Int(code)) else { return nil }
+        } else {
+            // 组合键模式：至少需要 ⌘ / ⌃ / ⌥ 之一，避免劫持普通按键
+            guard hasPrimaryModifier else { return nil }
+        }
         self.init(keyCode: code, carbonModifiers: mods)
     }
+
+    var isSingleKey: Bool { carbonModifiers == 0 }
+
+    /// 单键会在所有应用中被占用时的提醒（字母、数字、标点等）
+    var singleKeyWarning: String? {
+        guard isSingleKey else { return nil }
+        let code = Int(keyCode)
+        if Hotkey.functionKeys.contains(code) || Hotkey.navigationKeys.contains(code) || Hotkey.keypadKeys.contains(code) { return nil }
+        return "「\(displayString)」作为单键快捷键后，在所有应用中按下它都会触发截图而无法正常输入，建议改用 F 功能键。"
+    }
+
+    static let functionKeys: Set<Int> = [kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19]
+    static let navigationKeys: Set<Int> = [kVK_Home, kVK_End, kVK_PageUp, kVK_PageDown, kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow]
+    static let keypadKeys: Set<Int> = [kVK_ANSI_Keypad0, kVK_ANSI_Keypad1, kVK_ANSI_Keypad2, kVK_ANSI_Keypad3, kVK_ANSI_Keypad4, kVK_ANSI_Keypad5, kVK_ANSI_Keypad6, kVK_ANSI_Keypad7, kVK_ANSI_Keypad8, kVK_ANSI_Keypad9, kVK_ANSI_KeypadDecimal, kVK_ANSI_KeypadPlus, kVK_ANSI_KeypadMinus, kVK_ANSI_KeypadMultiply, kVK_ANSI_KeypadDivide, kVK_ANSI_KeypadEquals, kVK_ANSI_KeypadClear]
 
     var displayString: String {
         var s = ""
@@ -54,6 +80,9 @@ struct Hotkey: Codable, Equatable {
             kVK_Home: "Home", kVK_End: "End", kVK_PageUp: "PgUp", kVK_PageDown: "PgDn",
             kVK_F1: "F1", kVK_F2: "F2", kVK_F3: "F3", kVK_F4: "F4", kVK_F5: "F5", kVK_F6: "F6",
             kVK_F7: "F7", kVK_F8: "F8", kVK_F9: "F9", kVK_F10: "F10", kVK_F11: "F11", kVK_F12: "F12",
+            kVK_F13: "F13", kVK_F14: "F14", kVK_F15: "F15", kVK_F16: "F16", kVK_F17: "F17", kVK_F18: "F18", kVK_F19: "F19",
+            kVK_ANSI_KeypadDecimal: "Num.", kVK_ANSI_KeypadPlus: "Num+", kVK_ANSI_KeypadMinus: "Num-", kVK_ANSI_KeypadMultiply: "Num*",
+            kVK_ANSI_KeypadDivide: "Num/", kVK_ANSI_KeypadEquals: "Num=", kVK_ANSI_KeypadClear: "NumClear",
             kVK_ANSI_Keypad0: "Num0", kVK_ANSI_Keypad1: "Num1", kVK_ANSI_Keypad2: "Num2", kVK_ANSI_Keypad3: "Num3",
             kVK_ANSI_Keypad4: "Num4", kVK_ANSI_Keypad5: "Num5", kVK_ANSI_Keypad6: "Num6", kVK_ANSI_Keypad7: "Num7",
             kVK_ANSI_Keypad8: "Num8", kVK_ANSI_Keypad9: "Num9", kVK_ANSI_KeypadEnter: "NumEnter",
