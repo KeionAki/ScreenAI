@@ -117,11 +117,13 @@ final class AppState: ObservableObject {
         settings.$listenPort.dropFirst().removeDuplicates()
             .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.restartServer() }.store(in: &cancellables)
+        // 注意：@Published 在赋值前发出通知，必须用通知携带的新值，不能回读属性
         settings.$captionMode.dropFirst().removeDuplicates()
-            .sink { [weak self] _ in self?.updateCaptionVisibility() }.store(in: &cancellables)
+            .sink { [weak self] mode in self?.updateCaptionVisibility(mode: mode) }.store(in: &cancellables)
         settings.$historyDirectory.dropFirst().removeDuplicates()
             .sink { [weak self] p in self?.history.setDirectory(URL(fileURLWithPath: p, isDirectory: true)) }.store(in: &cancellables)
         settings.$captureEnabled.dropFirst()
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.menuBar?.refresh() }.store(in: &cancellables)
         pairing.$session.receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.menuBar?.refresh() }.store(in: &cancellables)
@@ -135,6 +137,7 @@ final class AppState: ObservableObject {
         switch e {
         case let .status(message, _): lastStatus = message
         case let .failed(_, message, _): lastStatus = message
+        case let .completed(_, text, _, _, _): copyToClipboardIfEnabled(text)
         default: break
         }
         analyzingCount = pipeline.queueCount
@@ -276,7 +279,15 @@ final class AppState: ObservableObject {
 
     // MARK: Caption
 
-    func updateCaptionVisibility() {
-        if settings.captionMode == .off { captionPanel.hide() } else { captionPanel.show() }
+    func updateCaptionVisibility(mode: CaptionMode? = nil) {
+        if (mode ?? settings.captionMode) == .off { captionPanel.hide() } else { captionPanel.show() }
+    }
+
+    /// 结果自动复制到剪贴板
+    private func copyToClipboardIfEnabled(_ text: String) {
+        guard settings.autoCopyToClipboard, !text.isEmpty else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
     }
 }

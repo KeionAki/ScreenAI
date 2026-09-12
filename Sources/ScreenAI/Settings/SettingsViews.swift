@@ -324,6 +324,10 @@ struct DisplaySettingsView: View {
                 }
                 Button("重置窗口位置") { state.captionPanel.resetPosition() }
             }
+            Section("结果输出") {
+                Toggle("结果自动复制到剪贴板", isOn: $settings.autoCopyToClipboard)
+                Text("开启后每次分析完成，答案文本会自动写入剪贴板，可直接 ⌘V 粘贴；会覆盖剪贴板原有内容。").font(.caption).foregroundColor(.secondary)
+            }
             Section("手机端") {
                 Text("手机端消息保留条数与提示音在 iPhone 页面右上角的设置中调整。").font(.caption).foregroundColor(.secondary)
             }

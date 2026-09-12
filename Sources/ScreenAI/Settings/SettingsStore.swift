@@ -47,6 +47,7 @@ final class SettingsStore: ObservableObject {
     @Published var captionFontSize: Double { didSet { d.set(captionFontSize, forKey: "captionFontSize") } }
     @Published var captionHistoryCount: Int { didSet { d.set(captionHistoryCount, forKey: "captionHistoryCount") } }
     @Published var captionWidth: Double { didSet { d.set(captionWidth, forKey: "captionWidth") } }
+    @Published var autoCopyToClipboard: Bool { didSet { d.set(autoCopyToClipboard, forKey: "autoCopyToClipboard") } }
 
     // MARK: Connection
     @Published var listenPort: Int { didSet { d.set(listenPort, forKey: "listenPort") } }
@@ -85,6 +86,7 @@ final class SettingsStore: ObservableObject {
         captionFontSize = d.object(forKey: "captionFontSize") as? Double ?? 14
         captionHistoryCount = d.object(forKey: "captionHistoryCount") as? Int ?? 5
         captionWidth = d.object(forKey: "captionWidth") as? Double ?? 400
+        autoCopyToClipboard = d.object(forKey: "autoCopyToClipboard") as? Bool ?? false
 
         listenPort = d.object(forKey: "listenPort") as? Int ?? 8899
         addressMode = d.string(forKey: "addressMode") ?? "hostname"
