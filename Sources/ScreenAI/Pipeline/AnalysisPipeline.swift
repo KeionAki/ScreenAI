@@ -46,6 +46,9 @@ final class AnalysisPipeline {
     private var pending: [AnalysisJob] = []
     private var active: AnalysisJob?
     private var lastTrigger = Date.distantPast
+    private var lastSignature: [UInt8]?
+    /// 定时捕获因画面无变化而跳过的次数（供菜单显示）
+    private(set) var skippedUnchanged = 0
 
     var onEvent: ((PipelineEvent) -> Void)?
     var onCaptureDisabled: (() -> Void)?
@@ -60,37 +63,56 @@ final class AnalysisPipeline {
 
     // MARK: Trigger（主线程）
 
-    func trigger() {
+    /// automatic = true 表示定时触发：忙碌时静默跳过，可按设置跳过无变化画面，不弹状态提示。
+    func trigger(automatic: Bool = false) {
         dispatchPrecondition(condition: .onQueue(.main))
         let now = Date()
-        guard now.timeIntervalSince(lastTrigger) * 1000 >= Double(settings.debounceMs) else { return }
+        if !automatic {
+            guard now.timeIntervalSince(lastTrigger) * 1000 >= Double(settings.debounceMs) else { return }
+        }
         lastTrigger = now
 
         guard settings.captureEnabled else {
-            emit(.status(message: "捕获已停止，请在菜单栏点击「启动捕获」", level: "warning"))
+            if !automatic { emit(.status(message: "捕获已停止，请在菜单栏点击「启动捕获」", level: "warning")) }
             return
         }
         guard ScreenCapturer.effectivePermission() else {
-            emit(.failed(id: UUID().uuidString, message: CaptureError.permissionDenied.localizedDescription, source: nil))
+            if !automatic { emit(.failed(id: UUID().uuidString, message: CaptureError.permissionDenied.localizedDescription, source: nil)) }
             return
         }
-        guard queueCount < AnalysisPipeline.maxQueue else {
-            emit(.status(message: "分析队列已满（\(AnalysisPipeline.maxQueue) 个），本次触发已忽略", level: "warning"))
-            return
+        if automatic {
+            guard queueCount == 0 else { return }   // 上一次还没结束，等下一个周期
+        } else {
+            guard queueCount < AnalysisPipeline.maxQueue else {
+                emit(.status(message: "分析队列已满（\(AnalysisPipeline.maxQueue) 个），本次触发已忽略", level: "warning"))
+                return
+            }
         }
         guard let target = resolveTarget() else { return }
         let config = snapshotConfig()
         let id = UUID().uuidString
+        let skipUnchanged = automatic && settings.autoCaptureSkipUnchanged
+        let previousSignature = lastSignature
 
         captureQueue.async { [weak self] in
             do {
                 let result = try ScreenCapturer.capture(target)
+                let signature = ChangeDetector.signature(result.image)
+                if skipUnchanged && ChangeDetector.isUnchanged(previousSignature, signature) {
+                    Log.capture.info("定时捕获：画面无变化，跳过")
+                    DispatchQueue.main.async { self?.skippedUnchanged += 1 }
+                    return
+                }
                 guard let encoded = ImageEncoder.encode(result.image, maxLongEdge: config.maxLongEdge, quality: config.jpegQuality) else {
                     throw CaptureError.captureFailed
                 }
                 Log.capture.info("截图 \(result.image.width)x\(result.image.height) → \(encoded.width)x\(encoded.height), \(encoded.byteCount / 1024) KB")
-                let job = AnalysisJob(id: id, createdAt: now, source: result.sourceDescription, image: result.image, encoded: encoded, config: config)
-                DispatchQueue.main.async { self?.enqueue(job) }
+                let source = automatic ? "定时 · " + result.sourceDescription : result.sourceDescription
+                let job = AnalysisJob(id: id, createdAt: now, source: source, image: result.image, encoded: encoded, config: config)
+                DispatchQueue.main.async {
+                    self?.lastSignature = signature
+                    self?.enqueue(job)
+                }
             } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 DispatchQueue.main.async { self?.captureFailed(id: id, message: message, config: config) }

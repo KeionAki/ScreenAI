@@ -8,6 +8,7 @@ final class MenuBarController: NSObject {
     private let statusLine = NSMenuItem(title: "状态：就绪", action: nil, keyEquivalent: "")
     private let toggleItem = NSMenuItem(title: "停止捕获", action: #selector(toggleCapture), keyEquivalent: "")
     private let queueLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let autoItem = NSMenuItem(title: "定时捕获", action: #selector(toggleAuto), keyEquivalent: "")
     private let phoneLine = NSMenuItem(title: "手机：未连接", action: nil, keyEquivalent: "")
     private let pairItem = NSMenuItem(title: "显示验证码…", action: #selector(showPairing), keyEquivalent: "")
     private let disconnectItem = NSMenuItem(title: "断开手机连接", action: #selector(disconnect), keyEquivalent: "")
@@ -27,7 +28,7 @@ final class MenuBarController: NSObject {
         queueLine.isEnabled = false
         phoneLine.isEnabled = false
         serverLine.isEnabled = false
-        for item in [toggleItem, pairItem, disconnectItem, permissionItem] { item.target = self }
+        for item in [toggleItem, pairItem, disconnectItem, permissionItem, autoItem] { item.target = self }
 
         let history = NSMenuItem(title: "查看历史记录…", action: #selector(showHistory), keyEquivalent: "h")
         history.target = self
@@ -40,6 +41,7 @@ final class MenuBarController: NSObject {
         menu.addItem(permissionItem)
         menu.addItem(queueLine)
         menu.addItem(toggleItem)
+        menu.addItem(autoItem)
         menu.addItem(.separator())
         menu.addItem(phoneLine)
         menu.addItem(serverLine)
@@ -66,6 +68,10 @@ final class MenuBarController: NSObject {
         statusLine.title = running ? "状态：运行中（\(state.settings.hotkey.displayString)）" : "状态：已停止"
         permissionItem.isHidden = ScreenCapturer.effectivePermission()
         toggleItem.title = running ? "停止捕获" : "启动捕获"
+        let interval = Int(max(3, state.settings.autoCaptureInterval))
+        autoItem.title = "定时捕获（每 \(interval) 秒）"
+        autoItem.state = state.settings.autoCaptureEnabled ? .on : .off
+        autoItem.isEnabled = running
         let q = state.pipeline.queueCount
         queueLine.title = q > 0 ? "分析中…（队列 \(q)）" : (state.lastStatus.isEmpty ? "" : state.lastStatus.truncated(50))
         queueLine.isHidden = queueLine.title.isEmpty
@@ -88,6 +94,7 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func toggleCapture() { state.toggleCapture() }
+    @objc private func toggleAuto() { state.toggleAutoCapture() }
     @objc private func fixPermission() { state.showSettings(.capture) }
     @objc private func showPairing() { state.showPairing() }
     @objc private func disconnect() { state.disconnectPhone() }

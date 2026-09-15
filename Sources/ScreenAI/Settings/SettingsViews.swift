@@ -234,6 +234,18 @@ struct CaptureSettingsView: View {
                 }
                 Stepper("防抖间隔：\(settings.debounceMs) ms", value: $settings.debounceMs, in: 100...2000, step: 100)
             }
+            Section("定时自动捕获") {
+                Toggle("按固定间隔自动截图分析", isOn: $settings.autoCaptureEnabled)
+                LabeledContent("间隔（秒）") {
+                    HStack {
+                        TextField("", value: $settings.autoCaptureInterval, format: .number).frame(width: 70)
+                        Stepper("", value: $settings.autoCaptureInterval, in: 3...3600, step: 5).labelsHidden()
+                    }
+                }
+                Toggle("画面无变化时跳过（节省 API 调用）", isOn: $settings.autoCaptureSkipUnchanged)
+                Text("最小 3 秒。上一次分析尚未结束时，到点会自动跳过等下一周期；定时产生的记录在来源中标注「定时」。菜单栏也可随时开关。")
+                    .font(.caption).foregroundColor(.secondary)
+            }
             Section("目标丢失时的行为") {
                 Picker("窗口关闭时", selection: $settings.windowLossBehavior) {
                     ForEach(TargetLossBehavior.allCases) { Text($0.displayName).tag($0) }

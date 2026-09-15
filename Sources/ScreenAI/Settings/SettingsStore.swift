@@ -37,6 +37,9 @@ final class SettingsStore: ObservableObject {
     @Published var regionLossBehavior: TargetLossBehavior { didSet { d.set(regionLossBehavior.rawValue, forKey: "regionLossBehavior") } }
     @Published var debounceMs: Int { didSet { d.set(debounceMs, forKey: "debounceMs") } }
     @Published var captureEnabled: Bool { didSet { d.set(captureEnabled, forKey: "captureEnabled") } }
+    @Published var autoCaptureEnabled: Bool { didSet { d.set(autoCaptureEnabled, forKey: "autoCaptureEnabled") } }
+    @Published var autoCaptureInterval: Double { didSet { d.set(autoCaptureInterval, forKey: "autoCaptureInterval") } }
+    @Published var autoCaptureSkipUnchanged: Bool { didSet { d.set(autoCaptureSkipUnchanged, forKey: "autoCaptureSkipUnchanged") } }
     @Published var hotkey: Hotkey { didSet { d.setCodable(hotkey, forKey: "hotkey") } }
     /// 快捷键类型："combo"（组合键）或 "single"（单键）
     @Published var hotkeyMode: String { didSet { d.set(hotkeyMode, forKey: "hotkeyMode") } }
@@ -78,6 +81,9 @@ final class SettingsStore: ObservableObject {
         regionLossBehavior = TargetLossBehavior(rawValue: d.string(forKey: "regionLossBehavior") ?? "") ?? .stop
         debounceMs = d.object(forKey: "debounceMs") as? Int ?? 300
         captureEnabled = d.object(forKey: "captureEnabled") as? Bool ?? true
+        autoCaptureEnabled = d.object(forKey: "autoCaptureEnabled") as? Bool ?? false
+        autoCaptureInterval = d.object(forKey: "autoCaptureInterval") as? Double ?? 30
+        autoCaptureSkipUnchanged = d.object(forKey: "autoCaptureSkipUnchanged") as? Bool ?? true
         hotkey = d.codable(Hotkey.self, forKey: "hotkey") ?? Hotkey.default
         hotkeyMode = d.string(forKey: "hotkeyMode") ?? "combo"
 

@@ -28,6 +28,7 @@ final class AppState: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private var certTimer: Timer?
+    private var autoCaptureTimer: Timer?
     var menuBar: MenuBarController?
     lazy var captionPanel = CaptionPanelController(model: caption, settings: settings)
     lazy var pairingWindow = PairingWindowController(state: self)
@@ -95,6 +96,7 @@ final class AppState: ObservableObject {
             }
         }
         certTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in self?.refreshCertificatesIfNeeded() }
+        rescheduleAutoCapture()
 
         if !ScreenCapturer.hasPermission() {
             ScreenCapturer.requestPermission()
@@ -105,6 +107,7 @@ final class AppState: ObservableObject {
     func shutdown() {
         HotkeyManager.shared.unregister()
         certTimer?.invalidate()
+        autoCaptureTimer?.invalidate()
         hub.stop()
         server.stop()
         captionPanel.hide()
@@ -125,6 +128,12 @@ final class AppState: ObservableObject {
         settings.$captureEnabled.dropFirst()
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.menuBar?.refresh() }.store(in: &cancellables)
+        settings.$autoCaptureEnabled.dropFirst().removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.rescheduleAutoCapture() }.store(in: &cancellables)
+        settings.$autoCaptureInterval.dropFirst().removeDuplicates()
+            .debounce(for: .seconds(0.5), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.rescheduleAutoCapture() }.store(in: &cancellables)
         pairing.$session.receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.menuBar?.refresh() }.store(in: &cancellables)
     }
@@ -164,6 +173,27 @@ final class AppState: ObservableObject {
     func quit() {
         shutdown()
         NSApp.terminate(nil)
+    }
+
+    // MARK: 定时自动捕获
+
+    func rescheduleAutoCapture() {
+        autoCaptureTimer?.invalidate()
+        autoCaptureTimer = nil
+        guard settings.autoCaptureEnabled else { menuBar?.refresh(); return }
+        let interval = max(3, settings.autoCaptureInterval)
+        let t = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self = self, self.settings.captureEnabled else { return }
+            self.pipeline.trigger(automatic: true)
+        }
+        t.tolerance = min(2, interval * 0.1)
+        autoCaptureTimer = t
+        Log.app.info("定时捕获已开启，每 \(Int(interval)) 秒")
+        menuBar?.refresh()
+    }
+
+    func toggleAutoCapture() {
+        settings.autoCaptureEnabled.toggle()
     }
 
     // MARK: Hotkey

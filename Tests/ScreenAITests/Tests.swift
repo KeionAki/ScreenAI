@@ -534,3 +534,23 @@ func testVendorRequestBodies() {
         T.check(decoded.temperature == nil, "partial decode nil temperature")
     }
 }
+
+
+func testChangeDetector() {
+    T.run("change detector") {
+        func solid(_ v: CGFloat) -> CGImage {
+            let ctx = CGContext(data: nil, width: 200, height: 100, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)!
+            ctx.setFillColor(CGColor(red: v, green: v, blue: v, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
+            return ctx.makeImage()!
+        }
+        let a = ChangeDetector.signature(solid(0.5))
+        let b = ChangeDetector.signature(solid(0.5))
+        let c = ChangeDetector.signature(solid(0.9))
+        T.equal(a.count, 32 * 32, "signature size")
+        T.check(ChangeDetector.difference(a, b) < 0.001, "identical images ~0 diff")
+        T.check(ChangeDetector.difference(a, c) > 0.2, "different images large diff")
+        T.check(ChangeDetector.isUnchanged(a, b), "unchanged detected")
+        T.check(!ChangeDetector.isUnchanged(a, c), "changed detected")
+        T.check(!ChangeDetector.isUnchanged(nil, b), "no previous → treated as changed")
+    }
+}
