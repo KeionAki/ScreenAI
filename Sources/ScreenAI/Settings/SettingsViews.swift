@@ -334,6 +334,10 @@ struct DisplaySettingsView: View {
                 LabeledContent("窗口宽度 \(Int(settings.captionWidth)) pt") {
                     Slider(value: $settings.captionWidth, in: 100...800, step: 10).frame(width: 200)
                 }
+                LabeledContent("窗口高度 \(Int(settings.captionHeight)) pt") {
+                    Slider(value: $settings.captionHeight, in: 60...1000, step: 10).frame(width: 200)
+                }
+                Text("窗口大小固定，内容超出时在窗口内滚动，输出过程中不会改变窗口尺寸。").font(.caption).foregroundColor(.secondary)
                 Button("重置窗口位置") { state.captionPanel.resetPosition() }
             }
             Section("结果输出") {

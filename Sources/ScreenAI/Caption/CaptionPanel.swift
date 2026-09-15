@@ -17,7 +17,7 @@ final class CaptionPanelController {
 
     init(model: CaptionModel, settings: SettingsStore) {
         self.settings = settings
-        panel = CaptionPanel(contentRect: NSRect(x: 80, y: 120, width: settings.captionWidth, height: 100),
+        panel = CaptionPanel(contentRect: NSRect(x: 80, y: 120, width: settings.captionWidth, height: settings.captionHeight),
                              styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
@@ -35,10 +35,6 @@ final class CaptionPanelController {
         panel.contentView = hosting
         panel.setFrameAutosaveName("ScreenAICaptionPanel")
 
-        model.objectWillChange
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in DispatchQueue.main.async { self?.updateSize() } }
-            .store(in: &cancellables)
         settings.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in DispatchQueue.main.async { self?.updateSize() } }
@@ -55,14 +51,13 @@ final class CaptionPanelController {
 
     var isVisible: Bool { panel.isVisible }
 
+    /// 尺寸只由设置决定，内容变化不会改变窗口大小（内容在窗口内滚动）
     func updateSize() {
         guard !sizing else { return }
         sizing = true
         defer { sizing = false }
-        hosting.layoutSubtreeIfNeeded()
-        let fitting = hosting.fittingSize
         let width = CGFloat(settings.captionWidth)
-        let height = max(44, fitting.height)
+        let height = CGFloat(max(60, settings.captionHeight))
         var frame = panel.frame
         let top = frame.maxY
         frame.size = NSSize(width: width, height: height)

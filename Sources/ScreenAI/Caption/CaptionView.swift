@@ -13,18 +13,23 @@ struct CaptionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             header
-            if model.entries.isEmpty {
-                Text("按 \(settings.hotkey.displayString) 截图并分析")
-                    .font(.system(size: settings.captionFontSize - 1))
-                    .foregroundColor(.black.opacity(0.55))
-                    .padding(.vertical, 4)
-            }
-            ForEach(Array(model.entries.prefix(settings.captionHistoryCount).enumerated()), id: \.element.id) { index, entry in
-                row(entry, index: index)
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if model.entries.isEmpty {
+                        Text("按 \(settings.hotkey.displayString) 截图并分析")
+                            .font(.system(size: settings.captionFontSize - 1))
+                            .foregroundColor(.black.opacity(0.55))
+                            .padding(.vertical, 4)
+                    }
+                    ForEach(Array(model.entries.prefix(settings.captionHistoryCount).enumerated()), id: \.element.id) { index, entry in
+                        row(entry, index: index)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(10)
-        .frame(width: settings.captionWidth, alignment: .leading)
+        .frame(width: settings.captionWidth, height: settings.captionHeight, alignment: .topLeading)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(settings.captionOpacity)))
     }
 
