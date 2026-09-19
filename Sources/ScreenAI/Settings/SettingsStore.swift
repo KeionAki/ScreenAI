@@ -17,6 +17,18 @@ final class SettingsStore: ObservableObject {
 4. 如果画面中没有任何完整题目，只输出：未检测到完整题目
 """
 
+    /// 键入功能推荐的编辑器设置（VSCode / Cursor 等 Monaco 系编辑器）
+    static let recommendedEditorSettings = """
+    "editor.autoClosingBrackets": "never",
+    "editor.autoClosingQuotes": "never",
+    "editor.acceptSuggestionOnEnter": "off",
+    "editor.quickSuggestions": false,
+    "editor.suggestOnTriggerCharacters": false,
+    "editor.inlineSuggest.enabled": false,
+    "editor.formatOnType": false,
+    "editor.formatOnPaste": false
+    """
+
     /// v1.1 及更早的默认提示词，仅用于升级迁移
     static let legacyPrompt = "你是一个题目识别与解答助手。请分析提供的屏幕截图，识别其中包含的题目内容（包括图片和文字区域），将题目完整地整理出来，然后给出正确答案。仅输出答案文本，不要包含额外解释。如果截图中没有题目，输出\"未检测到题目\"。"
 
@@ -64,6 +76,7 @@ final class SettingsStore: ObservableObject {
     @Published var typingJitter: Double { didSet { d.set(typingJitter, forKey: "typingJitter") } }
     @Published var typingCountdown: Double { didSet { d.set(typingCountdown, forKey: "typingCountdown") } }
     @Published var typingClearAutoIndent: Bool { didSet { d.set(typingClearAutoIndent, forKey: "typingClearAutoIndent") } }
+    @Published var typingDismissSuggestions: Bool { didSet { d.set(typingDismissSuggestions, forKey: "typingDismissSuggestions") } }
     @Published var typingTabWidth: Int { didSet { d.set(typingTabWidth, forKey: "typingTabWidth") } }
 
     // MARK: Caption
@@ -117,6 +130,7 @@ final class SettingsStore: ObservableObject {
         typingJitter = d.object(forKey: "typingJitter") as? Double ?? 0.3
         typingCountdown = d.object(forKey: "typingCountdown") as? Double ?? 2
         typingClearAutoIndent = d.object(forKey: "typingClearAutoIndent") as? Bool ?? true
+        typingDismissSuggestions = d.object(forKey: "typingDismissSuggestions") as? Bool ?? true
         typingTabWidth = d.object(forKey: "typingTabWidth") as? Int ?? 4
 
         captionMode = CaptionMode(rawValue: d.string(forKey: "captionMode") ?? "") ?? .staticList
@@ -146,7 +160,8 @@ final class SettingsStore: ObservableObject {
 
     var typingOptions: TypingOptions {
         TypingOptions(charsPerSecond: typingCPS, jitter: typingJitter, countdown: typingCountdown,
-                      clearAutoIndent: typingClearAutoIndent, tabWidth: typingTabWidth)
+                      clearAutoIndent: typingClearAutoIndent, dismissSuggestions: typingDismissSuggestions,
+                      tabWidth: typingTabWidth)
     }
 
     /// 旧版本（全局 maxTokens / thinkingMode / imageDetail，DeepSeek、Kimi 走「自定义」）→ 按厂商参数

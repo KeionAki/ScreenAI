@@ -49,6 +49,7 @@ enum DiagnosticRunner {
         if let c = number("--cps") { options.charsPerSecond = c }
         if args.contains("--no-clear-indent") { options.clearAutoIndent = false }
         if args.contains("--clear-indent") { options.clearAutoIndent = true }
+        if args.contains("--no-escape") { options.dismissSuggestions = false }
 
         print("辅助功能权限: \(TextTyper.hasPermission() ? "已授予" : "未授予")")
         guard TextTyper.hasPermission() else {
@@ -64,8 +65,8 @@ enum DiagnosticRunner {
             }
             print("最前应用: \(front)")
         }
-        let steps = TextTyper.plan(code: CodeExtractor.normalize(text, tabWidth: options.tabWidth), clearAutoIndent: options.clearAutoIndent)
-        print("待键入 \(text.count) 字符，\(text.components(separatedBy: "\n").count) 行；步骤 \(steps.count)，清缩进=\(options.clearAutoIndent)，速度=\(Int(options.charsPerSecond))/秒")
+        let steps = TextTyper.plan(code: CodeExtractor.normalize(text, tabWidth: options.tabWidth), clearAutoIndent: options.clearAutoIndent, dismissSuggestions: options.dismissSuggestions)
+        print("待键入 \(text.count) 字符，\(text.components(separatedBy: "\n").count) 行；步骤 \(steps.count)，清缩进=\(options.clearAutoIndent)，关补全=\(options.dismissSuggestions)，速度=\(Int(options.charsPerSecond))/秒")
 
         var result: TypingResult?
         TextTyper.shared.onProgress = { typed, total in

@@ -288,6 +288,9 @@ struct CaptureSettingsView: View {
                 LabeledContent("开始前倒计时 \(String(format: "%.1f", settings.typingCountdown)) 秒") {
                     Slider(value: $settings.typingCountdown, in: 0...10, step: 0.5).frame(width: 200)
                 }
+                Toggle("换行前按 Esc 关闭补全提示（强烈建议开启）", isOn: $settings.typingDismissSuggestions)
+                Text("编辑器默认「按回车接受补全」，补全浮层打开时回车不会换行，会导致刚打完的一整行被下一行内容顶替。开启此项可避免。")
+                    .font(.caption).foregroundColor(.secondary)
                 Toggle("换行后清除编辑器自动缩进", isOn: $settings.typingClearAutoIndent)
                 LabeledContent("制表符展开为空格数") {
                     Stepper("\(settings.typingTabWidth)", value: $settings.typingTabWidth, in: 1...8)
@@ -298,18 +301,20 @@ struct CaptureSettingsView: View {
                     Button("停止键入") { state.stopTyping() }
                     if !typingMessage.isEmpty { Text(typingMessage).font(.caption).foregroundColor(.secondary) }
                 }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("使用前请在 VSCode 中关闭自动补全括号与引号，否则逐字键入会产生多余的括号：")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("请把下面这些设置加入 VSCode 的 settings.json，否则自动补全括号、按回车接受补全等功能会改写键入内容：")
                         .font(.caption).foregroundColor(.secondary)
-                    Text("\"editor.autoClosingBrackets\": \"never\"\n\"editor.autoClosingQuotes\": \"never\"")
+                    Text(SettingsStore.recommendedEditorSettings)
                         .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                    HStack {
-                        Button("复制这两行设置") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString("\"editor.autoClosingBrackets\": \"never\",\n\"editor.autoClosingQuotes\": \"never\",", forType: .string)
-                            typingMessage = "已复制，粘贴到 VSCode 的 settings.json"
-                        }.controlSize(.small)
-                    }
+                        .padding(6)
+                        .background(RoundedRectangle(cornerRadius: 5).fill(Color.secondary.opacity(0.10)))
+                    Button("复制推荐设置") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(SettingsStore.recommendedEditorSettings, forType: .string)
+                        typingMessage = "已复制，粘贴到 VSCode 的 settings.json"
+                    }.controlSize(.small)
+                    Text("若再把 editor.autoIndent 设为 none，可关闭上面的「换行后清除编辑器自动缩进」，此时键入只有字符和回车、不含任何删除动作，最安全。")
+                        .font(.caption).foregroundColor(.secondary)
                     Text("流程：按「分析」快捷键解答编程题，字幕显示「已完成」即表示代码已准备好；再点进编辑器把光标放好，按「开始键入代码」快捷键，倒计时结束后开始逐字键入，按「停止键入」可随时中断。只键入代码块内容，模型的解释文字不会被打进去。")
                         .font(.caption).foregroundColor(.secondary)
                 }

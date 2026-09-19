@@ -128,14 +128,20 @@ scripts/make-cert.sh
 **首次使用前的两步准备：**
 
 1. **授予「辅助功能」权限**：设置 › 捕获设置 › 键入到光标，点「申请权限」，在系统设置中勾选 ScreenAI。
-2. **关闭 VSCode 的自动补全括号与引号**，否则逐字键入会产生多余的括号。在 VSCode 的 `settings.json` 中加入（设置面板里有「复制这两行设置」按钮）：
+2. **在 VSCode 的 `settings.json` 中加入下面这些设置**（应用设置面板里有「复制推荐设置」按钮）。缺少它们时，自动补全括号会多打出括号引号，「按回车接受补全」还会吃掉换行，导致刚打完的一整行被下一行内容顶替：
 
    ```json
    "editor.autoClosingBrackets": "never",
    "editor.autoClosingQuotes": "never",
+   "editor.acceptSuggestionOnEnter": "off",
+   "editor.quickSuggestions": false,
+   "editor.suggestOnTriggerCharacters": false,
+   "editor.inlineSuggest.enabled": false,
+   "editor.formatOnType": false,
+   "editor.formatOnPaste": false
    ```
 
-   自动缩进不用关，应用会在每次换行后清除编辑器自动插入的缩进，保证代码缩进与模型输出一致。若你把 `editor.autoIndent` 设为 `none`，可在设置里关掉「换行后清除编辑器自动缩进」，键入会更干净。
+   自动缩进不用关，应用会在每次换行后清除编辑器自动插入的缩进。若额外把 `editor.autoIndent` 设为 `none`，可关闭设置里的「换行后清除编辑器自动缩进」，此时键入只有字符和回车、不含任何删除动作，最安全。
 
 **使用流程：**
 
@@ -149,6 +155,8 @@ scripts/make-cert.sh
 **可调参数**（设置 › 捕获设置 › 键入到光标）：键入速度（3–80 字符/秒，默认 25）、速度抖动（默认 30%，让节奏更自然）、开始前倒计时（默认 2 秒）、制表符展开空格数。面板上的「测试键入」可以先在编辑器里试一段示例代码。
 
 **安全设计：** 焦点在 ScreenAI 自己的窗口上时会拒绝键入；键入过程中会暂停截图捕获，快捷键和定时捕获都不会触发新的分析，避免覆盖正在键入的代码；可随时用快捷键或菜单栏停止；只键入代码块内容，模型的解释文字不会被打进去。
+
+**已在真实 VSCode 中验证**：25 行 574 字符的代码键入后与模型输出逐字节一致。
 
 **注意目标编辑器的文本替换。** 键入走的是系统键盘事件，目标应用开启的「自动大写」「智能引号」等文本替换会照常生效。TextEdit、备忘录这类应用默认开启自动大写，会把每行首字母变成大写；VSCode、牛客等代码编辑器没有这些功能，不受影响。用 `scripts/type-test.sh` 可以把一份代码键入 TextEdit 并逐字节比对，验证键入链路。
 

@@ -112,11 +112,12 @@
 
 - 需要「辅助功能」权限（`AXIsProcessTrusted`），与屏幕录制是两项独立授权。
 - 用 `CGEvent` + `keyboardSetUnicodeString` 逐字符合成键盘事件，投递到 `.cghidEventTap`；换行用真实回车键（`kVK_Return`）。
+- **换行前先按 Esc**（`dismissSuggestions`，默认开）：编辑器默认 `acceptSuggestionOnEnter: "on"`，补全浮层打开时回车会被用来接受补全而不换行；此时后续的「占位字符 + 选到行首」会选中上一整行并被下一行首字符替换，表现为「刚打完的一整行突然消失」。Esc 先关闭浮层可避免。`EditorSimulator` 里用 `suggestOnEnter` 建模了这一行为并作为回归测试。
 - **VSCode 适配**：自动补全括号/引号无法在单次按键层面绕开，要求用户在 `settings.json` 中关闭 `editor.autoClosingBrackets` 与 `editor.autoClosingQuotes`。自动缩进由程序处理：换行后先打一个标记字符（保证选区非空，否则空行上的退格会删掉刚建立的换行），再按两次 Shift+Home（VSCode 为智能行首，两次才到第 0 列）选中「缩进 + 标记」，随后键入的第一个字符直接替换选区；空行则用退格删除选区。
 - 速率 = 1 / 每秒字符数，乘以 `1 ± jitter` 的随机系数；睡眠分片执行以便及时响应中止。
 - 安全：开始前倒计时、焦点在自身窗口时拒绝键入、键入期间挂起截图捕获（`AnalysisPipeline.trigger` 直接返回）、随时可中止、只键入 `CodeExtractor` 提取出的代码。
 - 行首选择用 ⌘⇧←（按两次）而非 Shift+Home：Home 在 NSTextView 中是「移到文稿开头」，Shift+Home 会选中整篇并被下一个字符替换。
-- 验证：`EditorSimulator` 单测在「有/无自动缩进」两种编辑器模型下回放 `TypingStep`，断言还原出原始代码；`scripts/type-test.sh` 用 `open -n -a` 启动（让 TCC 把辅助功能权限归属给 ScreenAI 而非终端）键入到 TextEdit 并按字节比对。已实测 574 字符 25 行完全还原，唯一差异来自 TextEdit 的「自动大写」文本替换。
+- 验证：`EditorSimulator` 单测在「有/无自动缩进」两种编辑器模型下回放 `TypingStep`，断言还原出原始代码；`scripts/type-test.sh` 用 `open -n -a` 启动（让 TCC 把辅助功能权限归属给 ScreenAI 而非终端）键入到 TextEdit 并按字节比对。已实测：TextEdit 574 字符 25 行完全还原（唯一差异是 TextEdit 的「自动大写」）；VSCode 在应用推荐设置后逐字节完全一致。`scripts/vscode-type-test.sh` 为 VSCode 版验证脚本。
 
 ## 7. HTTP 接口
 

@@ -11,6 +11,9 @@ struct TypingOptions {
     var countdown: TimeInterval = 2
     /// 换行后清除编辑器自动插入的缩进（VSCode 默认会自动缩进）
     var clearAutoIndent: Bool = true
+    /// 换行前先按 Esc 关闭补全提示：否则回车会被「按回车接受补全」吃掉，
+    /// 导致没有真正换行，随后的「选到行首」会选中上一整行并被下一个字符替换。
+    var dismissSuggestions: Bool = true
     var tabWidth: Int = 4
 }
 
@@ -26,6 +29,7 @@ enum TypingResult {
 enum TypingStep: Equatable {
     case char(Character)     // 键入一个字符（选区存在时会替换选区）
     case newline             // 回车
+    case escape              // Esc，关闭补全提示等浮层
     case marker              // 占位字符，保证随后的选区非空
     case selectToLineStart   // 从光标选到行首（⌘⇧← 按两次，兼容智能行首）
     case deleteSelection     // 退格，删除选区
@@ -72,11 +76,14 @@ final class TextTyper {
     /// clearAutoIndent 时的做法：换行后先打一个占位字符，保证「选到行首」的选区非空
     /// （否则空行上的退格会删掉刚建立的换行），再选中「自动缩进 + 占位字符」，
     /// 由本行的第一个字符直接替换选区；空行则用退格删除选区。
-    static func plan(code: String, clearAutoIndent: Bool) -> [TypingStep] {
+    static func plan(code: String, clearAutoIndent: Bool, dismissSuggestions: Bool = true) -> [TypingStep] {
         var steps: [TypingStep] = []
         let lines = code.components(separatedBy: "\n")
+        if dismissSuggestions { steps.append(.escape) }
         for (index, line) in lines.enumerated() {
             if index > 0 {
+                // 先关掉补全浮层，保证回车真的换行，而不是被「回车接受补全」吃掉
+                if dismissSuggestions { steps.append(.escape) }
                 steps.append(.newline)
                 if clearAutoIndent {
                     steps.append(.marker)
@@ -117,7 +124,7 @@ final class TextTyper {
         guard TextTyper.hasPermission() else { finish(.noPermission); return }
         if TextTyper.selfIsFrontmost() { finish(.selfFocused); return }
 
-        let steps = TextTyper.plan(code: code, clearAutoIndent: options.clearAutoIndent)
+        let steps = TextTyper.plan(code: code, clearAutoIndent: options.clearAutoIndent, dismissSuggestions: options.dismissSuggestions)
         queue.async { [weak self] in
             guard let self = self else { return }
             if !self.sleepInterruptibly(options.countdown) { self.finish(.aborted); return }
@@ -149,11 +156,15 @@ final class TextTyper {
                 if typed % 8 == 0 { report(typed, total) }
                 let factor = jitter > 0 ? Double.random(in: (1 - jitter)...(1 + jitter)) : 1
                 if !sleepInterruptibly(baseDelay * factor) { finish(.aborted); return }
+            case .escape:
+                postKey(CGKeyCode(kVK_Escape), source: source)
+                usleep(12_000)
             case .newline:
                 postKey(CGKeyCode(kVK_Return), source: source)
                 typed += 1
                 report(typed, total)
-                if !sleepInterruptibly(max(baseDelay, 0.012)) { finish(.aborted); return }
+                // 换行后稍作停顿，等编辑器完成自动缩进等处理
+                if !sleepInterruptibly(max(baseDelay, 0.030)) { finish(.aborted); return }
             case .marker:
                 postUnicode(String(TextTyper.markerCharacter), source: source)
                 usleep(6_000)
