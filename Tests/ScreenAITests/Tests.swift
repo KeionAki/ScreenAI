@@ -589,7 +589,7 @@ func testCodeExtractor() {
 func testHotkeyActions() {
     T.run("hotkey actions and defaults") {
         T.equal(HotkeyAction.capture.rawValue, 1, "capture id")
-        T.equal(HotkeyAction.typeCode.rawValue, 2, "type id")
+        T.equal(HotkeyAction.startTyping.rawValue, 2, "start typing id")
         T.equal(HotkeyAction.stopTyping.rawValue, 3, "stop id")
         T.equal(HotkeyAction.allCases.count, 3, "three actions")
         T.equal(Hotkey.defaultType.displayString, "⇧⌘D", "type hotkey default")
@@ -619,46 +619,41 @@ func testCaptionByQuestionType() {
         // 选择题/填空题：字幕原样显示「题号. 答案」
         let choice = CaptionModel()
         let cid = "choice-1"
-        choice.apply(.started(id: cid, source: "全屏", mode: .display), maxCount: 5)
+        choice.apply(.started(id: cid, source: "全屏"), maxCount: 5)
         T.check(!choice.entries[0].isCode, "choice: not code at start")
         for delta in ["2. B", "\n5. AC", "\n7. 光合作用"] {
             choice.apply(.partial(id: cid, delta: delta), maxCount: 5)
         }
         T.check(!choice.entries[0].isCode, "choice: still not code while streaming")
-        choice.apply(.completed(id: cid, text: "2. B\n5. AC\n7. 光合作用", source: "全屏", model: "m", latencyMs: 100, mode: .display), maxCount: 5)
+        choice.apply(.completed(id: cid, text: "2. B\n5. AC\n7. 光合作用", source: "全屏", model: "m", latencyMs: 100), maxCount: 5)
         T.check(!choice.entries[0].isCode, "choice: not code when finished")
         T.equal(choice.entries[0].text, "2. B\n5. AC\n7. 光合作用", "choice: caption shows answers verbatim")
         T.equal(choice.entries[0].kind, CaptionEntry.Kind.success, "choice: success")
 
-        // 编程题（用普通快捷键触发）：出现代码围栏后字幕不再显示正文
+        // 编程题：出现代码围栏后字幕不再显示正文，完成后显示「已完成」
         let code = CaptionModel()
         let kid = "code-1"
-        code.apply(.started(id: kid, source: "全屏", mode: .display), maxCount: 5)
+        code.apply(.started(id: kid, source: "全屏"), maxCount: 5)
         T.check(!code.entries[0].isCode, "coding: unknown before any output")
         code.apply(.partial(id: kid, delta: "```python\n"), maxCount: 5)
         T.check(code.entries[0].isCode, "coding: fence switches caption to code mode")
         code.apply(.partial(id: kid, delta: "import sys\n"), maxCount: 5)
         T.check(code.entries[0].isCode, "coding: stays in code mode")
-        code.apply(.completed(id: kid, text: "```python\nimport sys\nprint(1)\n```", source: "全屏", model: "m", latencyMs: 100, mode: .display), maxCount: 5)
+        code.apply(.completed(id: kid, text: "```python\nimport sys\nprint(1)\n```", source: "全屏", model: "m", latencyMs: 100), maxCount: 5)
         T.check(code.entries[0].isCode, "coding: code mode at completion")
         T.equal(code.entries[0].kind, CaptionEntry.Kind.success, "coding: success")
         T.equal(code.entries[0].note, "", "coding: no note → caption renders 已完成")
         T.equal(CodeExtractor.extract(code.entries[0].text), "import sys\nprint(1)", "coding: extractable code")
 
-        // 键入模式：一开始就按编程题处理，键入进度进入 note
-        let typed = CaptionModel()
-        let tid = "type-1"
-        typed.apply(.started(id: tid, source: "键入 · 全屏", mode: .type), maxCount: 5)
-        T.check(typed.entries[0].isCode, "type mode: code from the start")
-        typed.apply(.completed(id: tid, text: "```py\nx=1\n```", source: "键入 · 全屏", model: "m", latencyMs: 10, mode: .type), maxCount: 5)
-        typed.setNote("键入中 40%", for: tid)
-        T.equal(typed.entries[0].note, "键入中 40%", "type mode: progress note set")
-        typed.setNote("", for: tid)
-        T.equal(typed.entries[0].note, "", "type mode: note cleared → 已完成")
+        // 手动开始键入后，进度写入 note；结束后清空回到「已完成」
+        code.setNote("键入中 40%", for: kid)
+        T.equal(code.entries[0].note, "键入中 40%", "typing progress note set")
+        code.setNote("", for: kid)
+        T.equal(code.entries[0].note, "", "note cleared → 已完成")
 
         // 错误仍照常显示
         let err = CaptionModel()
-        err.apply(.started(id: "e", source: "全屏", mode: .type), maxCount: 5)
+        err.apply(.started(id: "e", source: "全屏"), maxCount: 5)
         err.apply(.failed(id: "e", message: "API Key 无效", source: "全屏"), maxCount: 5)
         T.equal(err.entries[0].kind, CaptionEntry.Kind.error, "error kind kept")
         T.equal(err.entries[0].text, "API Key 无效", "error text shown even in code mode")

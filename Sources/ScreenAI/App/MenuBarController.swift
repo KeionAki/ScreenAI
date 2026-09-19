@@ -9,7 +9,7 @@ final class MenuBarController: NSObject {
     private let toggleItem = NSMenuItem(title: "停止捕获", action: #selector(toggleCapture), keyEquivalent: "")
     private let queueLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let autoItem = NSMenuItem(title: "定时捕获", action: #selector(toggleAuto), keyEquivalent: "")
-    private let typeItem = NSMenuItem(title: "分析并键入到光标", action: #selector(typeCode), keyEquivalent: "")
+    private let typeItem = NSMenuItem(title: "键入代码到光标", action: #selector(typeCode), keyEquivalent: "")
     private let stopTypeItem = NSMenuItem(title: "停止键入", action: #selector(stopTyping), keyEquivalent: "")
     private let phoneLine = NSMenuItem(title: "手机：未连接", action: nil, keyEquivalent: "")
     private let pairItem = NSMenuItem(title: "显示验证码…", action: #selector(showPairing), keyEquivalent: "")
@@ -77,8 +77,12 @@ final class MenuBarController: NSObject {
         autoItem.state = state.settings.autoCaptureEnabled ? .on : .off
         autoItem.isEnabled = running
         let typing = TextTyper.shared.isTyping
-        typeItem.title = "分析并键入到光标（\(state.settings.typeHotkey.displayString)）"
-        typeItem.isEnabled = running && !typing
+        if let summary = state.pendingCodeSummary {
+            typeItem.title = "键入代码到光标 · \(summary)（\(state.settings.typeHotkey.displayString)）"
+        } else {
+            typeItem.title = "键入代码到光标（暂无代码）"
+        }
+        typeItem.isEnabled = state.hasPendingCode && !typing
         stopTypeItem.title = "停止键入（\(state.settings.stopHotkey.displayString)）"
         stopTypeItem.isHidden = !typing
         let q = state.pipeline.queueCount
@@ -108,7 +112,7 @@ final class MenuBarController: NSObject {
 
     @objc private func toggleCapture() { state.toggleCapture() }
     @objc private func toggleAuto() { state.toggleAutoCapture() }
-    @objc private func typeCode() { state.triggerTypeCode() }
+    @objc private func typeCode() { state.startTypingPendingCode() }
     @objc private func stopTyping() { state.stopTyping() }
     @objc private func fixPermission() { state.showSettings(.capture) }
     @objc private func showPairing() { state.showPairing() }

@@ -25,12 +25,16 @@ final class AppState: ObservableObject {
     @Published var lastStatus = ""
     @Published var hotkeyError: String?
     @Published var typingProgress: String?
+    /// 最近一次分析得到的、等待键入的代码（编程题）
+    @Published private(set) var pendingCodeSummary: String?
     @Published var analyzingCount = 0
 
     private var cancellables = Set<AnyCancellable>()
     private var certTimer: Timer?
     private var autoCaptureTimer: Timer?
     private var typingJobID: String?
+    private var pendingCode: String?
+    private var pendingCodeJobID: String?
     var menuBar: MenuBarController?
     lazy var captionPanel = CaptionPanelController(model: caption, settings: settings)
     lazy var pairingWindow = PairingWindowController(state: self)
@@ -122,7 +126,7 @@ final class AppState: ObservableObject {
         settings.$hotkey.dropFirst().removeDuplicates()
             .sink { [weak self] hk in self?.register(hk, for: .capture) }.store(in: &cancellables)
         settings.$typeHotkey.dropFirst().removeDuplicates()
-            .sink { [weak self] hk in self?.register(hk, for: .typeCode) }.store(in: &cancellables)
+            .sink { [weak self] hk in self?.register(hk, for: .startTyping) }.store(in: &cancellables)
         settings.$stopHotkey.dropFirst().removeDuplicates()
             .sink { [weak self] hk in self?.register(hk, for: .stopTyping) }.store(in: &cancellables)
         settings.$listenPort.dropFirst().removeDuplicates()
@@ -154,9 +158,9 @@ final class AppState: ObservableObject {
         switch e {
         case let .status(message, _): lastStatus = message
         case let .failed(_, message, _): lastStatus = message
-        case let .completed(id, text, _, _, _, mode):
+        case let .completed(id, text, _, _, _):
             copyToClipboardIfEnabled(text)
-            if mode == .type { startTyping(jobID: id, answer: text) }
+            bufferCode(jobID: id, answer: text)
         default: break
         }
         analyzingCount = pipeline.queueCount
@@ -211,9 +215,9 @@ final class AppState: ObservableObject {
     func handleHotkey(_ action: HotkeyAction) {
         switch action {
         case .capture:
-            pipeline.trigger(mode: .display)
-        case .typeCode:
-            triggerTypeCode()
+            pipeline.trigger()
+        case .startTyping:
+            startTypingPendingCode()
         case .stopTyping:
             stopTyping()
         }
@@ -224,8 +228,8 @@ final class AppState: ObservableObject {
         if !HotkeyManager.shared.register(settings.hotkey, for: .capture) {
             failed.append("\(HotkeyAction.capture.displayName) \(settings.hotkey.displayString)")
         }
-        if !HotkeyManager.shared.register(settings.typeHotkey, for: .typeCode) {
-            failed.append("\(HotkeyAction.typeCode.displayName) \(settings.typeHotkey.displayString)")
+        if !HotkeyManager.shared.register(settings.typeHotkey, for: .startTyping) {
+            failed.append("\(HotkeyAction.startTyping.displayName) \(settings.typeHotkey.displayString)")
         }
         if !HotkeyManager.shared.register(settings.stopHotkey, for: .stopTyping) {
             failed.append("\(HotkeyAction.stopTyping.displayName) \(settings.stopHotkey.displayString)")
@@ -247,10 +251,10 @@ final class AppState: ObservableObject {
 
     private func setupTyping() {
         TextTyper.shared.onProgress = { [weak self] typed, total in
-            guard let self = self, let id = self.typingJobID else { return }
+            guard let self = self else { return }
             let percent = total > 0 ? Int(Double(typed) / Double(total) * 100) : 0
             self.typingProgress = "键入中 \(percent)%"
-            self.caption.setNote("键入中 \(percent)%", for: id)
+            if let id = self.typingJobID { self.caption.setNote("键入中 \(percent)%", for: id) }
             self.menuBar?.refresh()
         }
         TextTyper.shared.onFinished = { [weak self] result in
@@ -266,35 +270,50 @@ final class AppState: ObservableObject {
         }
     }
 
-    func triggerTypeCode() {
+    /// 分析完成后把代码存起来，等待用户按键触发键入。非编程题会清空缓存。
+    private func bufferCode(jobID: String, answer: String) {
+        guard CodeExtractor.containsCodeBlock(answer), let code = CodeExtractor.extract(answer), !code.isEmpty else {
+            pendingCode = nil
+            pendingCodeJobID = nil
+            pendingCodeSummary = nil
+            menuBar?.refresh()
+            return
+        }
+        pendingCode = code
+        pendingCodeJobID = jobID
+        let lines = code.components(separatedBy: "\n").count
+        pendingCodeSummary = "\(lines) 行"
+        Log.app.info("已准备好可键入的代码，\(lines) 行；按 \(self.settings.typeHotkey.displayString, privacy: .public) 开始键入")
+        menuBar?.refresh()
+    }
+
+    var hasPendingCode: Bool { pendingCode?.isEmpty == false }
+
+    /// 「开始键入」快捷键：把上一次分析得到的代码键入到当前光标处
+    func startTypingPendingCode() {
         guard !TextTyper.shared.isTyping else {
             handle(.status(message: "正在键入中，按 \(settings.stopHotkey.displayString) 可停止", level: "warning"))
             return
         }
+        guard let code = pendingCode, !code.isEmpty else {
+            handle(.status(message: "还没有可键入的代码，请先按 \(settings.hotkey.displayString) 分析一道编程题", level: "warning"))
+            return
+        }
         guard TextTyper.shared.hasAccessibilityPermission else {
-            handle(.status(message: "「分析并键入」需要「辅助功能」权限，请在设置 › 捕获设置中授权", level: "warning"))
+            handle(.status(message: "键入需要「辅助功能」权限，请在设置 › 捕获设置中授权", level: "warning"))
             showSettings(.capture)
             return
         }
-        pipeline.trigger(mode: .type)
+        typingJobID = pendingCodeJobID
+        typingProgress = "键入中 0%"
+        if let id = typingJobID { caption.setNote("键入中 0%", for: id) }
+        TextTyper.shared.type(code, options: settings.typingOptions)
+        menuBar?.refresh()
     }
 
     func stopTyping() {
         guard TextTyper.shared.isTyping else { return }
         TextTyper.shared.abort()
-    }
-
-    /// 分析完成且为键入模式时调用
-    private func startTyping(jobID: String, answer: String) {
-        guard let code = CodeExtractor.codeToType(answer), !code.isEmpty else {
-            handle(.status(message: "回答中没有可键入的代码", level: "warning"))
-            return
-        }
-        typingJobID = jobID
-        typingProgress = "键入中 0%"
-        caption.setNote("键入中 0%", for: jobID)
-        TextTyper.shared.type(code, options: settings.typingOptions)
-        menuBar?.refresh()
     }
 
     // MARK: Certificates
@@ -391,6 +410,7 @@ final class AppState: ObservableObject {
             "type_hotkey": settings.typeHotkey.displayString,
             "stop_hotkey": settings.stopHotkey.displayString,
             "typing": TextTyper.shared.isTyping,
+            "pending_code": pendingCodeSummary ?? "",
             "queue": pipeline.queueCount,
             "provider": settings.apiProvider.rawValue,
             "model": settings.currentModel,

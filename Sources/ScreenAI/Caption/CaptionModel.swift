@@ -21,8 +21,8 @@ final class CaptionModel: ObservableObject {
 
     func apply(_ event: PipelineEvent, maxCount: Int) {
         switch event {
-        case let .started(id, source, mode):
-            let isCode = mode == .type
+        case let .started(id, source):
+            let isCode = false
             if let i = entries.firstIndex(where: { $0.id == id }) {
                 entries[i].text = ""
                 entries[i].note = ""
@@ -45,8 +45,8 @@ final class CaptionModel: ObservableObject {
                     entries[i].isCode = true
                 }
             }
-        case let .completed(id, text, source, _, _, mode):
-            let isCode = mode == .type || CodeExtractor.containsCodeBlock(text)
+        case let .completed(id, text, source, _, _):
+            let isCode = CodeExtractor.containsCodeBlock(text)
             if let i = entries.firstIndex(where: { $0.id == id }) {
                 entries[i].text = text
                 entries[i].kind = .success

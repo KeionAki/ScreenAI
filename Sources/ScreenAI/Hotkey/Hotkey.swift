@@ -99,14 +99,14 @@ struct Hotkey: Codable, Equatable {
 
 /// 快捷键动作
 enum HotkeyAction: UInt32, CaseIterable {
-    case capture = 1     // 分析并显示
-    case typeCode = 2    // 分析并键入
-    case stopTyping = 3  // 停止键入
+    case capture = 1      // 分析（截图并解答）
+    case startTyping = 2  // 把已准备好的代码键入光标处
+    case stopTyping = 3   // 停止键入
 
     var displayName: String {
         switch self {
-        case .capture: return "分析并显示"
-        case .typeCode: return "分析并键入"
+        case .capture: return "分析"
+        case .startTyping: return "开始键入代码"
         case .stopTyping: return "停止键入"
         }
     }

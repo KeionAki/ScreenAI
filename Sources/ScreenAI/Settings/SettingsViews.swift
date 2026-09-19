@@ -226,13 +226,13 @@ struct CaptureSettingsView: View {
                     }
                 }
                 HStack {
-                    Text("分析并显示")
+                    Text("分析（截图解答）")
                     Spacer()
                     HotkeyRecorderView(hotkey: $settings.hotkey, allowSingleKey: settings.hotkeyMode == "single").frame(width: 160, height: 24)
                     Button("恢复默认") { settings.hotkey = settings.hotkeyMode == "single" ? .defaultSingle : .default }
                 }
                 HStack {
-                    Text("分析并键入到光标")
+                    Text("开始键入代码")
                     Spacer()
                     HotkeyRecorderView(hotkey: $settings.typeHotkey, allowSingleKey: settings.hotkeyMode == "single").frame(width: 160, height: 24)
                     Button("恢复默认") { settings.typeHotkey = settings.hotkeyMode == "single" ? .defaultTypeSingle : .defaultType }
@@ -310,7 +310,7 @@ struct CaptureSettingsView: View {
                             typingMessage = "已复制，粘贴到 VSCode 的 settings.json"
                         }.controlSize(.small)
                     }
-                    Text("流程：先点进编辑器把光标放好，再按「分析并键入」快捷键；倒计时结束后开始逐字键入，按「停止键入」可随时中断。答案中的代码块会被自动提取，只键入代码本身。")
+                    Text("流程：按「分析」快捷键解答编程题，字幕显示「已完成」即表示代码已准备好；再点进编辑器把光标放好，按「开始键入代码」快捷键，倒计时结束后开始逐字键入，按「停止键入」可随时中断。只键入代码块内容，模型的解释文字不会被打进去。")
                         .font(.caption).foregroundColor(.secondary)
                 }
             }
