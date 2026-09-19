@@ -554,3 +554,62 @@ func testChangeDetector() {
         T.check(!ChangeDetector.isUnchanged(nil, b), "no previous → treated as changed")
     }
 }
+
+func testCodeExtractor() {
+    T.run("code extractor") {
+        let plain = "2. B\n5. AC\n7. 光合作用"
+        T.check(!CodeExtractor.containsCodeBlock(plain), "plain answer has no fence")
+        T.check(CodeExtractor.extract(plain) == nil, "no code block in plain answer")
+
+        let fenced = "```python\ndef f(x):\n    return x + 1\n```"
+        T.check(CodeExtractor.containsCodeBlock(fenced), "fence detected")
+        T.equal(CodeExtractor.extract(fenced), "def f(x):\n    return x + 1", "code extracted without fence or language")
+
+        let noLang = "```\nprint(1)\n```"
+        T.equal(CodeExtractor.extract(noLang), "print(1)", "fence without language")
+
+        let withText = "这是答案：\n```cpp\nint main(){return 0;}\n```\n以上。"
+        T.equal(CodeExtractor.extract(withText), "int main(){return 0;}", "code extracted from surrounding text")
+
+        let unterminated = "```python\nx = 1\ny = 2"
+        T.equal(CodeExtractor.extract(unterminated), "x = 1\ny = 2", "streaming unterminated block")
+
+        T.equal(CodeExtractor.codeToType(plain), plain, "codeToType falls back to raw text")
+        T.equal(CodeExtractor.codeToType(fenced), "def f(x):\n    return x + 1", "codeToType prefers code block")
+        T.check(CodeExtractor.codeToType("   \n  ") == nil, "blank text yields nil")
+
+        let tabs = "if x:\n\treturn 1\r\nelse:\r\n\treturn 2"
+        let norm = CodeExtractor.normalize(tabs, tabWidth: 4)
+        T.check(!norm.contains("\t"), "tabs expanded")
+        T.check(!norm.contains("\r"), "CRLF normalized")
+        T.equal(norm, "if x:\n    return 1\nelse:\n    return 2", "normalized code")
+    }
+}
+
+func testHotkeyActions() {
+    T.run("hotkey actions and defaults") {
+        T.equal(HotkeyAction.capture.rawValue, 1, "capture id")
+        T.equal(HotkeyAction.typeCode.rawValue, 2, "type id")
+        T.equal(HotkeyAction.stopTyping.rawValue, 3, "stop id")
+        T.equal(HotkeyAction.allCases.count, 3, "three actions")
+        T.equal(Hotkey.defaultType.displayString, "⇧⌘D", "type hotkey default")
+        T.equal(Hotkey.defaultStop.displayString, "⇧⌘.", "stop hotkey default")
+        T.equal(Hotkey.defaultTypeSingle.displayString, "F6", "type single default")
+        T.equal(Hotkey.defaultStopSingle.displayString, "F8", "stop single default")
+        // 三个默认快捷键互不相同
+        let all = [Hotkey.default, .defaultType, .defaultStop]
+        T.equal(Set(all.map { $0.displayString }).count, 3, "combo defaults distinct")
+        let singles = [Hotkey.defaultSingle, .defaultTypeSingle, .defaultStopSingle]
+        T.equal(Set(singles.map { $0.displayString }).count, 3, "single defaults distinct")
+    }
+}
+
+func testPromptTemplate() {
+    T.run("default prompt covers scenes") {
+        let p = SettingsStore.defaultPrompt
+        for keyword in ["题号. 答案", "跳过", "```", "编程题", "未检测到完整题目"] {
+            T.check(p.contains(keyword), "prompt mentions \(keyword)")
+        }
+        T.check(p != SettingsStore.legacyPrompt, "new prompt differs from legacy")
+    }
+}

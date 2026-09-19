@@ -24,11 +24,13 @@ final class AppState: ObservableObject {
     @Published var connectedClients = 0
     @Published var lastStatus = ""
     @Published var hotkeyError: String?
+    @Published var typingProgress: String?
     @Published var analyzingCount = 0
 
     private var cancellables = Set<AnyCancellable>()
     private var certTimer: Timer?
     private var autoCaptureTimer: Timer?
+    private var typingJobID: String?
     var menuBar: MenuBarController?
     lazy var captionPanel = CaptionPanelController(model: caption, settings: settings)
     lazy var pairingWindow = PairingWindowController(state: self)
@@ -52,8 +54,9 @@ final class AppState: ObservableObject {
     func start() {
         let pairing = self.pairing
 
-        HotkeyManager.shared.onTrigger = { [weak self] in self?.pipeline.trigger() }
-        registerHotkey(settings.hotkey)
+        HotkeyManager.shared.onTrigger = { [weak self] action in self?.handleHotkey(action) }
+        registerAllHotkeys()
+        setupTyping()
 
         pipeline.onEvent = { [weak self] e in self?.handle(e) }
         pipeline.onCaptureDisabled = { [weak self] in self?.menuBar?.refresh() }
@@ -105,7 +108,8 @@ final class AppState: ObservableObject {
     }
 
     func shutdown() {
-        HotkeyManager.shared.unregister()
+        HotkeyManager.shared.unregisterAll()
+        TextTyper.shared.abort()
         certTimer?.invalidate()
         autoCaptureTimer?.invalidate()
         hub.stop()
@@ -116,7 +120,11 @@ final class AppState: ObservableObject {
 
     private func observeSettings() {
         settings.$hotkey.dropFirst().removeDuplicates()
-            .sink { [weak self] hk in self?.registerHotkey(hk) }.store(in: &cancellables)
+            .sink { [weak self] hk in self?.register(hk, for: .capture) }.store(in: &cancellables)
+        settings.$typeHotkey.dropFirst().removeDuplicates()
+            .sink { [weak self] hk in self?.register(hk, for: .typeCode) }.store(in: &cancellables)
+        settings.$stopHotkey.dropFirst().removeDuplicates()
+            .sink { [weak self] hk in self?.register(hk, for: .stopTyping) }.store(in: &cancellables)
         settings.$listenPort.dropFirst().removeDuplicates()
             .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.restartServer() }.store(in: &cancellables)
@@ -146,7 +154,9 @@ final class AppState: ObservableObject {
         switch e {
         case let .status(message, _): lastStatus = message
         case let .failed(_, message, _): lastStatus = message
-        case let .completed(_, text, _, _, _): copyToClipboardIfEnabled(text)
+        case let .completed(id, text, _, _, _, mode):
+            copyToClipboardIfEnabled(text)
+            if mode == .type { startTyping(jobID: id, answer: text) }
         default: break
         }
         analyzingCount = pipeline.queueCount
@@ -198,12 +208,93 @@ final class AppState: ObservableObject {
 
     // MARK: Hotkey
 
-    func registerHotkey(_ hk: Hotkey) {
-        if HotkeyManager.shared.register(hk) {
+    func handleHotkey(_ action: HotkeyAction) {
+        switch action {
+        case .capture:
+            pipeline.trigger(mode: .display)
+        case .typeCode:
+            triggerTypeCode()
+        case .stopTyping:
+            stopTyping()
+        }
+    }
+
+    func registerAllHotkeys() {
+        var failed: [String] = []
+        if !HotkeyManager.shared.register(settings.hotkey, for: .capture) {
+            failed.append("\(HotkeyAction.capture.displayName) \(settings.hotkey.displayString)")
+        }
+        if !HotkeyManager.shared.register(settings.typeHotkey, for: .typeCode) {
+            failed.append("\(HotkeyAction.typeCode.displayName) \(settings.typeHotkey.displayString)")
+        }
+        if !HotkeyManager.shared.register(settings.stopHotkey, for: .stopTyping) {
+            failed.append("\(HotkeyAction.stopTyping.displayName) \(settings.stopHotkey.displayString)")
+        }
+        hotkeyError = failed.isEmpty ? nil : "以下快捷键注册失败，可能已被系统或其他应用占用：" + failed.joined(separator: "、")
+        menuBar?.refresh()
+    }
+
+    func register(_ hk: Hotkey, for action: HotkeyAction) {
+        if HotkeyManager.shared.register(hk, for: action) {
             hotkeyError = nil
         } else {
-            hotkeyError = "快捷键 \(hk.displayString) 注册失败，可能已被系统或其他应用占用"
+            hotkeyError = "快捷键 \(hk.displayString)（\(action.displayName)）注册失败，可能已被系统或其他应用占用"
         }
+        menuBar?.refresh()
+    }
+
+    // MARK: 键入到光标
+
+    private func setupTyping() {
+        TextTyper.shared.onProgress = { [weak self] typed, total in
+            guard let self = self, let id = self.typingJobID else { return }
+            let percent = total > 0 ? Int(Double(typed) / Double(total) * 100) : 0
+            self.typingProgress = "键入中 \(percent)%"
+            self.caption.setNote("键入中 \(percent)%", for: id)
+            self.menuBar?.refresh()
+        }
+        TextTyper.shared.onFinished = { [weak self] result in
+            guard let self = self else { return }
+            let id = self.typingJobID
+            self.typingJobID = nil
+            self.typingProgress = nil
+            if let id = id { self.caption.setNote("", for: id) }
+            if let message = result.message {
+                self.handle(.status(message: message, level: "warning"))
+            }
+            self.menuBar?.refresh()
+        }
+    }
+
+    func triggerTypeCode() {
+        guard !TextTyper.shared.isTyping else {
+            handle(.status(message: "正在键入中，按 \(settings.stopHotkey.displayString) 可停止", level: "warning"))
+            return
+        }
+        guard TextTyper.shared.hasAccessibilityPermission else {
+            handle(.status(message: "「分析并键入」需要「辅助功能」权限，请在设置 › 捕获设置中授权", level: "warning"))
+            showSettings(.capture)
+            return
+        }
+        pipeline.trigger(mode: .type)
+    }
+
+    func stopTyping() {
+        guard TextTyper.shared.isTyping else { return }
+        TextTyper.shared.abort()
+    }
+
+    /// 分析完成且为键入模式时调用
+    private func startTyping(jobID: String, answer: String) {
+        guard let code = CodeExtractor.codeToType(answer), !code.isEmpty else {
+            handle(.status(message: "回答中没有可键入的代码", level: "warning"))
+            return
+        }
+        typingJobID = jobID
+        typingProgress = "键入中 0%"
+        caption.setNote("键入中 0%", for: jobID)
+        TextTyper.shared.type(code, options: settings.typingOptions)
+        menuBar?.refresh()
     }
 
     // MARK: Certificates
@@ -297,6 +388,9 @@ final class AppState: ObservableObject {
             "capture_enabled": settings.captureEnabled,
             "capture_scope": settings.captureScope.rawValue,
             "hotkey": settings.hotkey.displayString,
+            "type_hotkey": settings.typeHotkey.displayString,
+            "stop_hotkey": settings.stopHotkey.displayString,
+            "typing": TextTyper.shared.isTyping,
             "queue": pipeline.queueCount,
             "provider": settings.apiProvider.rawValue,
             "model": settings.currentModel,

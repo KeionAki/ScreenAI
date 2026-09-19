@@ -10,6 +10,12 @@ struct Hotkey: Codable, Equatable {
     static let `default` = Hotkey(keyCode: UInt32(kVK_ANSI_A), carbonModifiers: UInt32(cmdKey | shiftKey))
     /// 单键模式的默认值：F5
     static let defaultSingle = Hotkey(keyCode: UInt32(kVK_F5), carbonModifiers: 0)
+    /// 「分析并键入」默认 ⌘⇧D；单键默认 F6
+    static let defaultType = Hotkey(keyCode: UInt32(kVK_ANSI_D), carbonModifiers: UInt32(cmdKey | shiftKey))
+    static let defaultTypeSingle = Hotkey(keyCode: UInt32(kVK_F6), carbonModifiers: 0)
+    /// 「停止键入」默认 ⌘⇧.；单键默认 F8
+    static let defaultStop = Hotkey(keyCode: UInt32(kVK_ANSI_Period), carbonModifiers: UInt32(cmdKey | shiftKey))
+    static let defaultStopSingle = Hotkey(keyCode: UInt32(kVK_F8), carbonModifiers: 0)
 
     /// 单键模式下禁止使用的键（会让系统无法正常输入或操作）
     static let forbiddenSingleKeys: Set<Int> = [kVK_Space, kVK_Return, kVK_Tab, kVK_Delete, kVK_ForwardDelete, kVK_Escape, kVK_ANSI_KeypadEnter]
@@ -91,43 +97,63 @@ struct Hotkey: Codable, Equatable {
     }
 }
 
+/// 快捷键动作
+enum HotkeyAction: UInt32, CaseIterable {
+    case capture = 1     // 分析并显示
+    case typeCode = 2    // 分析并键入
+    case stopTyping = 3  // 停止键入
+
+    var displayName: String {
+        switch self {
+        case .capture: return "分析并显示"
+        case .typeCode: return "分析并键入"
+        case .stopTyping: return "停止键入"
+        }
+    }
+}
+
 /// 基于 Carbon RegisterEventHotKey 的全局快捷键，不需要辅助功能权限，不受焦点影响。
+/// 支持同时注册多个动作。
 final class HotkeyManager {
     static let shared = HotkeyManager()
 
-    var onTrigger: (() -> Void)?
-    private var hotKeyRef: EventHotKeyRef?
+    var onTrigger: ((HotkeyAction) -> Void)?
+    private var refs: [HotkeyAction: EventHotKeyRef] = [:]
+    private var current: [HotkeyAction: Hotkey] = [:]
     private var handlerRef: EventHandlerRef?
-    private var current: Hotkey?
     private static let signature: OSType = 0x53414931 // "SAI1"
 
     private init() {}
 
-    var registered: Hotkey? { current }
+    func registered(_ action: HotkeyAction) -> Hotkey? { current[action] }
 
     @discardableResult
-    func register(_ hotkey: Hotkey) -> Bool {
-        unregister()
+    func register(_ hotkey: Hotkey, for action: HotkeyAction) -> Bool {
+        unregister(action)
         installHandlerIfNeeded()
-        let hkID = EventHotKeyID(signature: HotkeyManager.signature, id: 1)
+        let hkID = EventHotKeyID(signature: HotkeyManager.signature, id: action.rawValue)
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(hotkey.keyCode, hotkey.carbonModifiers, hkID, GetApplicationEventTarget(), 0, &ref)
         guard status == noErr, let r = ref else {
-            Log.app.error("注册快捷键失败: \(status)")
+            Log.app.error("注册快捷键失败（\(action.displayName, privacy: .public)）: \(status)")
             return false
         }
-        hotKeyRef = r
-        current = hotkey
-        Log.app.info("已注册快捷键 \(hotkey.displayString, privacy: .public)")
+        refs[action] = r
+        current[action] = hotkey
+        Log.app.info("已注册快捷键 \(action.displayName, privacy: .public) = \(hotkey.displayString, privacy: .public)")
         return true
     }
 
-    func unregister() {
-        if let r = hotKeyRef {
+    func unregister(_ action: HotkeyAction) {
+        if let r = refs[action] {
             UnregisterEventHotKey(r)
-            hotKeyRef = nil
+            refs[action] = nil
         }
-        current = nil
+        current[action] = nil
+    }
+
+    func unregisterAll() {
+        for action in HotkeyAction.allCases { unregister(action) }
     }
 
     private func installHandlerIfNeeded() {
@@ -139,9 +165,10 @@ final class HotkeyManager {
             var hkID = EventHotKeyID()
             let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
                                            nil, MemoryLayout<EventHotKeyID>.size, nil, &hkID)
-            guard status == noErr, hkID.signature == HotkeyManager.signature else { return OSStatus(eventNotHandledErr) }
+            guard status == noErr, hkID.signature == HotkeyManager.signature,
+                  let action = HotkeyAction(rawValue: hkID.id) else { return OSStatus(eventNotHandledErr) }
             let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
-            DispatchQueue.main.async { manager.onTrigger?() }
+            DispatchQueue.main.async { manager.onTrigger?(action) }
             return noErr
         }
         InstallEventHandler(GetApplicationEventTarget(), callback, 1, &spec, selfPtr, &handlerRef)

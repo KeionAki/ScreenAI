@@ -17,6 +17,12 @@ struct AnalysisConfig {
     var providerConfig: ProviderConfig { ProviderConfig(kind: providerKind, apiKey: apiKey, endpoint: endpoint) }
 }
 
+/// 结果去向：显示在字幕/手机，或键入到光标处
+enum OutputMode: String, Equatable {
+    case display
+    case type
+}
+
 struct AnalysisJob {
     let id: String
     let createdAt: Date
@@ -24,13 +30,14 @@ struct AnalysisJob {
     let image: CGImage
     var encoded: EncodedImage
     let config: AnalysisConfig
+    let mode: OutputMode
 }
 
 enum PipelineEvent {
-    case started(id: String, source: String)
+    case started(id: String, source: String, mode: OutputMode)
     case thinking(id: String, chars: Int)
     case partial(id: String, delta: String)
-    case completed(id: String, text: String, source: String, model: String, latencyMs: Int)
+    case completed(id: String, text: String, source: String, model: String, latencyMs: Int, mode: OutputMode)
     case failed(id: String, message: String, source: String?)
     case status(message: String, level: String)   // info / warning
 }
@@ -64,7 +71,8 @@ final class AnalysisPipeline {
     // MARK: Trigger（主线程）
 
     /// automatic = true 表示定时触发：忙碌时静默跳过，可按设置跳过无变化画面，不弹状态提示。
-    func trigger(automatic: Bool = false) {
+    /// mode 决定结果去向：显示或键入到光标处。
+    func trigger(automatic: Bool = false, mode: OutputMode = .display) {
         dispatchPrecondition(condition: .onQueue(.main))
         let now = Date()
         if !automatic {
@@ -107,20 +115,21 @@ final class AnalysisPipeline {
                     throw CaptureError.captureFailed
                 }
                 Log.capture.info("截图 \(result.image.width)x\(result.image.height) → \(encoded.width)x\(encoded.height), \(encoded.byteCount / 1024) KB")
-                let source = automatic ? "定时 · " + result.sourceDescription : result.sourceDescription
-                let job = AnalysisJob(id: id, createdAt: now, source: source, image: result.image, encoded: encoded, config: config)
+                var source = automatic ? "定时 · " + result.sourceDescription : result.sourceDescription
+                if mode == .type { source = "键入 · " + source }
+                let job = AnalysisJob(id: id, createdAt: now, source: source, image: result.image, encoded: encoded, config: config, mode: mode)
                 DispatchQueue.main.async {
                     self?.lastSignature = signature
                     self?.enqueue(job)
                 }
             } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                DispatchQueue.main.async { self?.captureFailed(id: id, message: message, config: config) }
+                DispatchQueue.main.async { self?.captureFailed(id: id, message: message, config: config, mode: mode) }
             }
         }
     }
 
-    private func captureFailed(id: String, message: String, config: AnalysisConfig) {
+    private func captureFailed(id: String, message: String, config: AnalysisConfig, mode: OutputMode) {
         emit(.failed(id: id, message: message, source: nil))
         record(id: id, source: "", config: config, result: "", status: "error", error: message, latency: 0)
     }
@@ -181,7 +190,7 @@ final class AnalysisPipeline {
 
     private func enqueue(_ job: AnalysisJob) {
         pending.append(job)
-        emit(.started(id: job.id, source: job.source))
+        emit(.started(id: job.id, source: job.source, mode: job.mode))
         pump()
     }
 
@@ -212,7 +221,7 @@ final class AnalysisPipeline {
 
         while true {
             attempt += 1
-            if attempt > 1 { await emitAsync(.started(id: job.id, source: job.source)) }
+            if attempt > 1 { await emitAsync(.started(id: job.id, source: job.source, mode: job.mode)) }
             var accumulated = ""
             var reasoningChars = 0
             var finishReason: String?
@@ -248,7 +257,7 @@ final class AnalysisPipeline {
                         throw AIError.emptyResponse("模型未返回内容（结束原因：\(finishReason ?? "未知")）")
                     }
                 }
-                await emitAsync(.completed(id: job.id, text: text, source: job.source, model: job.config.model, latencyMs: latency))
+                await emitAsync(.completed(id: job.id, text: text, source: job.source, model: job.config.model, latencyMs: latency, mode: job.mode))
                 if finishReason == "length" {
                     await emitAsync(.status(message: "答案可能被截断（达到最大输出 tokens），可在 API 设置中增大上限", level: "warning"))
                 }
@@ -310,10 +319,10 @@ extension PipelineEvent {
     /// 转换为推送给手机端的消息
     var serverMessage: ServerMessage? {
         switch self {
-        case let .started(id, source): return .analysisStarted(id: id, timestamp: Date(), source: source)
+        case let .started(id, source, _): return .analysisStarted(id: id, timestamp: Date(), source: source)
         case let .thinking(id, chars): return .analysisThinking(id: id, chars: chars)
         case let .partial(id, delta): return .analysisPartial(id: id, delta: delta)
-        case let .completed(id, text, source, model, latency): return .analysisResult(id: id, timestamp: Date(), result: text, source: source, model: model, latencyMs: latency)
+        case let .completed(id, text, source, model, latency, _): return .analysisResult(id: id, timestamp: Date(), result: text, source: source, model: model, latencyMs: latency)
         case let .failed(id, message, source): return .error(id: id, timestamp: Date(), message: message, source: source)
         case let .status(message, level): return .statusChange(id: UUID().uuidString, timestamp: Date(), message: message, level: level)
         }

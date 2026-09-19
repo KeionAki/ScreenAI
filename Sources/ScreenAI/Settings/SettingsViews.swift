@@ -133,6 +133,8 @@ struct CaptureSettingsView: View {
     @ObservedObject private var settings: SettingsStore
     @State private var hasPermission = ScreenCapturer.effectivePermission()
     @State private var permissionMessage = ""
+    @State private var hasAccessibility = TextTyper.hasPermission()
+    @State private var typingMessage = ""
     @State private var displays: [DisplayInfo] = []
     @State private var windows: [WindowInfo] = []
     private let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
@@ -213,14 +215,33 @@ struct CaptureSettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .onChange(of: settings.hotkeyMode) { mode in
-                    if mode == "single", !settings.hotkey.isSingleKey { settings.hotkey = .defaultSingle }
-                    if mode == "combo", settings.hotkey.isSingleKey { settings.hotkey = .default }
+                    if mode == "single" {
+                        if !settings.hotkey.isSingleKey { settings.hotkey = .defaultSingle }
+                        if !settings.typeHotkey.isSingleKey { settings.typeHotkey = .defaultTypeSingle }
+                        if !settings.stopHotkey.isSingleKey { settings.stopHotkey = .defaultStopSingle }
+                    } else {
+                        if settings.hotkey.isSingleKey { settings.hotkey = .default }
+                        if settings.typeHotkey.isSingleKey { settings.typeHotkey = .defaultType }
+                        if settings.stopHotkey.isSingleKey { settings.stopHotkey = .defaultStop }
+                    }
                 }
                 HStack {
-                    Text("捕获快捷键")
+                    Text("分析并显示")
                     Spacer()
                     HotkeyRecorderView(hotkey: $settings.hotkey, allowSingleKey: settings.hotkeyMode == "single").frame(width: 160, height: 24)
                     Button("恢复默认") { settings.hotkey = settings.hotkeyMode == "single" ? .defaultSingle : .default }
+                }
+                HStack {
+                    Text("分析并键入到光标")
+                    Spacer()
+                    HotkeyRecorderView(hotkey: $settings.typeHotkey, allowSingleKey: settings.hotkeyMode == "single").frame(width: 160, height: 24)
+                    Button("恢复默认") { settings.typeHotkey = settings.hotkeyMode == "single" ? .defaultTypeSingle : .defaultType }
+                }
+                HStack {
+                    Text("停止键入")
+                    Spacer()
+                    HotkeyRecorderView(hotkey: $settings.stopHotkey, allowSingleKey: settings.hotkeyMode == "single").frame(width: 160, height: 24)
+                    Button("恢复默认") { settings.stopHotkey = settings.hotkeyMode == "single" ? .defaultStopSingle : .defaultStop }
                 }
                 if settings.hotkeyMode == "single" {
                     Text("点击输入框后按下一个按键即可。推荐 F1–F19 或数字小键盘；Mac 键盘的 F 键默认是亮度、音量等媒体键，需按住 fn 再按，或在「系统设置 › 键盘 › 键盘快捷键 › 功能键」中开启「将 F1、F2 等键用作标准功能键」。空格、回车、Tab、删除、Esc 不能作为单键。")
@@ -246,6 +267,53 @@ struct CaptureSettingsView: View {
                 Text("最小 3 秒。上一次分析尚未结束时，到点会自动跳过等下一周期；定时产生的记录在来源中标注「定时」。菜单栏也可随时开关。")
                     .font(.caption).foregroundColor(.secondary)
             }
+            Section("键入到光标（编程题）") {
+                HStack {
+                    Image(systemName: hasAccessibility ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundColor(hasAccessibility ? .green : .orange)
+                    Text(hasAccessibility ? "已授予「辅助功能」权限" : "未授予「辅助功能」权限，无法键入")
+                    Spacer()
+                    Button("重新检查") { hasAccessibility = TextTyper.hasPermission() }
+                    if !hasAccessibility {
+                        Button("申请权限") { TextTyper.requestPermission(); hasAccessibility = TextTyper.hasPermission() }
+                        Button("打开系统设置") { TextTyper.openAccessibilitySettings() }
+                    }
+                }
+                LabeledContent("键入速度 \(Int(settings.typingCPS)) 字符/秒") {
+                    Slider(value: $settings.typingCPS, in: 3...80, step: 1).frame(width: 200)
+                }
+                LabeledContent("速度抖动 \(Int(settings.typingJitter * 100))%") {
+                    Slider(value: $settings.typingJitter, in: 0...0.8, step: 0.05).frame(width: 200)
+                }
+                LabeledContent("开始前倒计时 \(String(format: "%.1f", settings.typingCountdown)) 秒") {
+                    Slider(value: $settings.typingCountdown, in: 0...10, step: 0.5).frame(width: 200)
+                }
+                Toggle("换行后清除编辑器自动缩进", isOn: $settings.typingClearAutoIndent)
+                LabeledContent("制表符展开为空格数") {
+                    Stepper("\(settings.typingTabWidth)", value: $settings.typingTabWidth, in: 1...8)
+                }
+                HStack {
+                    Button(TextTyper.shared.isTyping ? "键入中…" : "测试键入") { testTyping() }
+                        .disabled(!hasAccessibility)
+                    Button("停止键入") { state.stopTyping() }
+                    if !typingMessage.isEmpty { Text(typingMessage).font(.caption).foregroundColor(.secondary) }
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("使用前请在 VSCode 中关闭自动补全括号与引号，否则逐字键入会产生多余的括号：")
+                        .font(.caption).foregroundColor(.secondary)
+                    Text("\"editor.autoClosingBrackets\": \"never\"\n\"editor.autoClosingQuotes\": \"never\"")
+                        .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                    HStack {
+                        Button("复制这两行设置") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString("\"editor.autoClosingBrackets\": \"never\",\n\"editor.autoClosingQuotes\": \"never\",", forType: .string)
+                            typingMessage = "已复制，粘贴到 VSCode 的 settings.json"
+                        }.controlSize(.small)
+                    }
+                    Text("流程：先点进编辑器把光标放好，再按「分析并键入」快捷键；倒计时结束后开始逐字键入，按「停止键入」可随时中断。答案中的代码块会被自动提取，只键入代码本身。")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            }
             Section("目标丢失时的行为") {
                 Picker("窗口关闭时", selection: $settings.windowLossBehavior) {
                     ForEach(TargetLossBehavior.allCases) { Text($0.displayName).tag($0) }
@@ -261,10 +329,13 @@ struct CaptureSettingsView: View {
         .formStyle(.grouped)
         .onAppear {
             checkPermission()
+            hasAccessibility = TextTyper.hasPermission()
             refreshDisplays()
             refreshWindows()
         }
         .onReceive(permissionTimer) { _ in
+            let ax = TextTyper.hasPermission()
+            if ax != hasAccessibility { hasAccessibility = ax }
             let now = ScreenCapturer.effectivePermission()
             if now != hasPermission {
                 hasPermission = now
@@ -279,6 +350,12 @@ struct CaptureSettingsView: View {
         if !hasPermission && CGPreflightScreenCaptureAccess() == false {
             permissionMessage = ""
         }
+    }
+
+    private func testTyping() {
+        typingMessage = "\(Int(settings.typingCountdown)) 秒后开始，请把光标放到编辑器里"
+        let sample = "def solve(nums):\n    total = 0\n    for n in nums:\n        total += n\n\n    return total\n"
+        TextTyper.shared.type(sample, options: settings.typingOptions)
     }
 
     private func resetPermission() {

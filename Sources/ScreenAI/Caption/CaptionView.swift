@@ -64,7 +64,29 @@ struct CaptionView: View {
             .font(.system(size: max(9, size - 3)))
             .foregroundColor(.black.opacity(0.5))
 
-            if entry.kind == .pending && entry.text.isEmpty {
+            if entry.isCode {
+                // 编程题：不在电脑端显示代码，只显示状态
+                switch entry.kind {
+                case .success:
+                    HStack(spacing: 6) {
+                        if entry.note.isEmpty {
+                            Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                            Text("已完成").font(.system(size: size, weight: .medium)).foregroundColor(.black)
+                        } else {
+                            ProgressView().controlSize(.small)
+                            Text(entry.note).font(.system(size: size)).foregroundColor(.black.opacity(0.75))
+                        }
+                    }
+                case .error:
+                    Text(entry.text).font(.system(size: size)).foregroundColor(color(for: .error))
+                        .fixedSize(horizontal: false, vertical: true)
+                default:
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(entry.note.isEmpty ? "生成代码中…" : entry.note).font(.system(size: size)).foregroundColor(.black.opacity(0.75))
+                    }
+                }
+            } else if entry.kind == .pending && entry.text.isEmpty {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
                     Text(entry.note.isEmpty ? "分析中…" : entry.note).font(.system(size: size)).foregroundColor(.black.opacity(0.75))

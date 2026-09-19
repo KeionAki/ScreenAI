@@ -8,7 +8,9 @@ struct CaptionEntry: Identifiable, Equatable {
     var source: String
     var time: Date
     var kind: Kind
-    var note: String = ""     // 进行中的补充说明（如“思考中… 300 字”）
+    var note: String = ""     // 进行中的补充说明（如“思考中… 300 字”“键入中 40%”）
+    /// 编程题：字幕不显示代码，只显示状态
+    var isCode: Bool = false
 }
 
 /// 字幕窗口的数据：最新在最上。
@@ -19,14 +21,16 @@ final class CaptionModel: ObservableObject {
 
     func apply(_ event: PipelineEvent, maxCount: Int) {
         switch event {
-        case let .started(id, source):
+        case let .started(id, source, mode):
+            let isCode = mode == .type
             if let i = entries.firstIndex(where: { $0.id == id }) {
                 entries[i].text = ""
                 entries[i].note = ""
                 entries[i].kind = .pending
                 entries[i].time = Date()
+                entries[i].isCode = isCode
             } else {
-                entries.insert(CaptionEntry(id: id, text: "", source: source, time: Date(), kind: .pending), at: 0)
+                entries.insert(CaptionEntry(id: id, text: "", source: source, time: Date(), kind: .pending, isCode: isCode), at: 0)
             }
         case let .thinking(id, chars):
             if let i = entries.firstIndex(where: { $0.id == id }), entries[i].kind == .pending {
@@ -36,14 +40,21 @@ final class CaptionModel: ObservableObject {
             if let i = entries.firstIndex(where: { $0.id == id }) {
                 entries[i].text += delta
                 entries[i].note = ""
+                // 一旦出现代码围栏即判定为编程题，字幕不再显示正文
+                if !entries[i].isCode, CodeExtractor.containsCodeBlock(entries[i].text) {
+                    entries[i].isCode = true
+                }
             }
-        case let .completed(id, text, source, _, _):
+        case let .completed(id, text, source, _, _, mode):
+            let isCode = mode == .type || CodeExtractor.containsCodeBlock(text)
             if let i = entries.firstIndex(where: { $0.id == id }) {
                 entries[i].text = text
                 entries[i].kind = .success
                 entries[i].time = Date()
+                entries[i].isCode = entries[i].isCode || isCode
+                entries[i].note = ""
             } else {
-                entries.insert(CaptionEntry(id: id, text: text, source: source, time: Date(), kind: .success), at: 0)
+                entries.insert(CaptionEntry(id: id, text: text, source: source, time: Date(), kind: .success, isCode: isCode), at: 0)
             }
         case let .failed(id, message, source):
             if let i = entries.firstIndex(where: { $0.id == id }) {
@@ -62,6 +73,12 @@ final class CaptionModel: ObservableObject {
             for e in entries where kept.count < limit || e.kind == .pending { kept.append(e) }
             entries = kept
         }
+    }
+
+    /// 更新某条目的状态说明（键入进度等）
+    func setNote(_ note: String, for id: String) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].note = note
     }
 
     func clear() { entries.removeAll() }

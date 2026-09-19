@@ -9,6 +9,8 @@ final class MenuBarController: NSObject {
     private let toggleItem = NSMenuItem(title: "停止捕获", action: #selector(toggleCapture), keyEquivalent: "")
     private let queueLine = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let autoItem = NSMenuItem(title: "定时捕获", action: #selector(toggleAuto), keyEquivalent: "")
+    private let typeItem = NSMenuItem(title: "分析并键入到光标", action: #selector(typeCode), keyEquivalent: "")
+    private let stopTypeItem = NSMenuItem(title: "停止键入", action: #selector(stopTyping), keyEquivalent: "")
     private let phoneLine = NSMenuItem(title: "手机：未连接", action: nil, keyEquivalent: "")
     private let pairItem = NSMenuItem(title: "显示验证码…", action: #selector(showPairing), keyEquivalent: "")
     private let disconnectItem = NSMenuItem(title: "断开手机连接", action: #selector(disconnect), keyEquivalent: "")
@@ -28,7 +30,7 @@ final class MenuBarController: NSObject {
         queueLine.isEnabled = false
         phoneLine.isEnabled = false
         serverLine.isEnabled = false
-        for item in [toggleItem, pairItem, disconnectItem, permissionItem, autoItem] { item.target = self }
+        for item in [toggleItem, pairItem, disconnectItem, permissionItem, autoItem, typeItem, stopTypeItem] { item.target = self }
 
         let history = NSMenuItem(title: "查看历史记录…", action: #selector(showHistory), keyEquivalent: "h")
         history.target = self
@@ -42,6 +44,8 @@ final class MenuBarController: NSObject {
         menu.addItem(queueLine)
         menu.addItem(toggleItem)
         menu.addItem(autoItem)
+        menu.addItem(typeItem)
+        menu.addItem(stopTypeItem)
         menu.addItem(.separator())
         menu.addItem(phoneLine)
         menu.addItem(serverLine)
@@ -72,8 +76,17 @@ final class MenuBarController: NSObject {
         autoItem.title = "定时捕获（每 \(interval) 秒）"
         autoItem.state = state.settings.autoCaptureEnabled ? .on : .off
         autoItem.isEnabled = running
+        let typing = TextTyper.shared.isTyping
+        typeItem.title = "分析并键入到光标（\(state.settings.typeHotkey.displayString)）"
+        typeItem.isEnabled = running && !typing
+        stopTypeItem.title = "停止键入（\(state.settings.stopHotkey.displayString)）"
+        stopTypeItem.isHidden = !typing
         let q = state.pipeline.queueCount
-        queueLine.title = q > 0 ? "分析中…（队列 \(q)）" : (state.lastStatus.isEmpty ? "" : state.lastStatus.truncated(50))
+        if let progress = state.typingProgress {
+            queueLine.title = progress
+        } else {
+            queueLine.title = q > 0 ? "分析中…（队列 \(q)）" : (state.lastStatus.isEmpty ? "" : state.lastStatus.truncated(50))
+        }
         queueLine.isHidden = queueLine.title.isEmpty
 
         let n = state.connectedClients
@@ -95,6 +108,8 @@ final class MenuBarController: NSObject {
 
     @objc private func toggleCapture() { state.toggleCapture() }
     @objc private func toggleAuto() { state.toggleAutoCapture() }
+    @objc private func typeCode() { state.triggerTypeCode() }
+    @objc private func stopTyping() { state.stopTyping() }
     @objc private func fixPermission() { state.showSettings(.capture) }
     @objc private func showPairing() { state.showPairing() }
     @objc private func disconnect() { state.disconnectPhone() }

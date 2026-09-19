@@ -101,6 +101,21 @@
 - 不提供 HTTP 备用端口；证书生成失败时主端口退化为 HTTP。对外地址形式可选：主机名（默认，走 mDNS/IPv6 链路本地，不受 AnyConnect 等 VPN 的 IPv4 本地网络屏蔽影响）或局域网 IP；证书 SAN 同时包含主机名与 IP。
 - 安全上下文带来的功能：Service Worker 缓存外壳（`/sw.js`，网络优先）、Screen Wake Lock 保持常亮、Clipboard API。
 
+## 6.2 题目识别与结果去向
+
+- **提示词统一处理三种场景**，不由用户切换：逐题分段、跳过被边缘截断或缺选项的题、选择/填空题输出「题号. 答案」每题一行且禁用代码块、编程题只输出一个 ``` 代码块。因此「回答是否含围栏」即为「是否编程题」的判据（`CodeExtractor.containsCodeBlock`）。
+- **OutputMode**：`display` 走字幕与手机端；`type` 走键入。由快捷键决定，随 `AnalysisJob` 与 `PipelineEvent.started/completed` 传递。
+- **字幕规则**：非编程题原样显示「题号. 答案」；编程题（`CaptionEntry.isCode`）不显示代码，依次显示「生成代码中…」「键入中 N%」「已完成」。手机端与 CSV 保留完整内容。
+- **快捷键动作**（`HotkeyAction`，Carbon 热键 id 1/2/3）：capture / typeCode / stopTyping，共用一个「组合键或单键」类型开关。
+
+## 6.3 键入到光标（TextTyper）
+
+- 需要「辅助功能」权限（`AXIsProcessTrusted`），与屏幕录制是两项独立授权。
+- 用 `CGEvent` + `keyboardSetUnicodeString` 逐字符合成键盘事件，投递到 `.cghidEventTap`；换行用真实回车键（`kVK_Return`）。
+- **VSCode 适配**：自动补全括号/引号无法在单次按键层面绕开，要求用户在 `settings.json` 中关闭 `editor.autoClosingBrackets` 与 `editor.autoClosingQuotes`。自动缩进由程序处理：换行后先打一个标记字符（保证选区非空，否则空行上的退格会删掉刚建立的换行），再按两次 Shift+Home（VSCode 为智能行首，两次才到第 0 列）选中「缩进 + 标记」，随后键入的第一个字符直接替换选区；空行则用退格删除选区。
+- 速率 = 1 / 每秒字符数，乘以 `1 ± jitter` 的随机系数；睡眠分片执行以便及时响应中止。
+- 安全：开始前倒计时、焦点在自身窗口时拒绝键入、随时可中止、只键入 `CodeExtractor` 提取出的代码。
+
 ## 7. HTTP 接口
 
 | 方法 | 路径 | 说明 |
@@ -139,7 +154,8 @@
 
 | 项 | 默认 |
 |---|---|
-| 快捷键 | ⌘⇧A |
+| 快捷键 | 分析并显示 ⌘⇧A，分析并键入 ⌘⇧D，停止键入 ⌘⇧.（单键模式 F5 / F6 / F8） |
+| 键入速度 / 抖动 / 倒计时 | 25 字符每秒 / 30% / 2 秒 |
 | 捕获范围 | 全屏（鼠标所在显示器） |
 | 目标丢失行为 | 停止捕获 |
 | 端口 | 8899（HTTPS） |

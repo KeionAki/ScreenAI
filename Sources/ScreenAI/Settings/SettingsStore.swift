@@ -5,7 +5,20 @@ import Combine
 final class SettingsStore: ObservableObject {
     static let shared = SettingsStore()
 
-    static let defaultPrompt = "你是一个题目识别与解答助手。请分析提供的屏幕截图，识别其中包含的题目内容（包括图片和文字区域），将题目完整地整理出来，然后给出正确答案。仅输出答案文本，不要包含额外解释。如果截图中没有题目，输出\"未检测到题目\"。"
+    static let defaultPrompt = """
+你是屏幕答题助手。请分析截图，从上到下逐题识别其中的题目。
+
+规则：
+1. 按题号分段，逐题独立处理，绝不把一道题的选项用到另一道题上。
+2. 如果某道题的题干或选项被画面边缘截断、缺少选项、或看不到完整题干，直接跳过该题，不要输出，也不要说明跳过原因。
+3. 按题型输出：
+   - 选择题、多选题、填空题、判断题：每道完整的题输出一行，格式为「题号. 答案」，例如「2. B」「5. AC」「7. 光合作用」。只给答案，不要解释，不要使用代码块。
+   - 编程题：只输出完整可运行的代码，整段放在一个 ``` 代码块中，代码块外不要写任何文字。
+4. 如果画面中没有任何完整题目，只输出：未检测到完整题目
+"""
+
+    /// v1.1 及更早的默认提示词，仅用于升级迁移
+    static let legacyPrompt = "你是一个题目识别与解答助手。请分析提供的屏幕截图，识别其中包含的题目内容（包括图片和文字区域），将题目完整地整理出来，然后给出正确答案。仅输出答案文本，不要包含额外解释。如果截图中没有题目，输出\"未检测到题目\"。"
 
     static var defaultHistoryDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -43,6 +56,15 @@ final class SettingsStore: ObservableObject {
     @Published var hotkey: Hotkey { didSet { d.setCodable(hotkey, forKey: "hotkey") } }
     /// 快捷键类型："combo"（组合键）或 "single"（单键）
     @Published var hotkeyMode: String { didSet { d.set(hotkeyMode, forKey: "hotkeyMode") } }
+    @Published var typeHotkey: Hotkey { didSet { d.setCodable(typeHotkey, forKey: "typeHotkey") } }
+    @Published var stopHotkey: Hotkey { didSet { d.setCodable(stopHotkey, forKey: "stopHotkey") } }
+
+    // MARK: 键入到光标（编程题）
+    @Published var typingCPS: Double { didSet { d.set(typingCPS, forKey: "typingCPS") } }
+    @Published var typingJitter: Double { didSet { d.set(typingJitter, forKey: "typingJitter") } }
+    @Published var typingCountdown: Double { didSet { d.set(typingCountdown, forKey: "typingCountdown") } }
+    @Published var typingClearAutoIndent: Bool { didSet { d.set(typingClearAutoIndent, forKey: "typingClearAutoIndent") } }
+    @Published var typingTabWidth: Int { didSet { d.set(typingTabWidth, forKey: "typingTabWidth") } }
 
     // MARK: Caption
     @Published var captionMode: CaptionMode { didSet { d.set(captionMode.rawValue, forKey: "captionMode") } }
@@ -87,6 +109,15 @@ final class SettingsStore: ObservableObject {
         autoCaptureSkipUnchanged = d.object(forKey: "autoCaptureSkipUnchanged") as? Bool ?? true
         hotkey = d.codable(Hotkey.self, forKey: "hotkey") ?? Hotkey.default
         hotkeyMode = d.string(forKey: "hotkeyMode") ?? "combo"
+        // 未设置过时，按当前快捷键类型给出对应的默认值，避免与「快捷键类型」开关不一致
+        let singleMode = (d.string(forKey: "hotkeyMode") ?? "combo") == "single"
+        typeHotkey = d.codable(Hotkey.self, forKey: "typeHotkey") ?? (singleMode ? Hotkey.defaultTypeSingle : Hotkey.defaultType)
+        stopHotkey = d.codable(Hotkey.self, forKey: "stopHotkey") ?? (singleMode ? Hotkey.defaultStopSingle : Hotkey.defaultStop)
+        typingCPS = d.object(forKey: "typingCPS") as? Double ?? 25
+        typingJitter = d.object(forKey: "typingJitter") as? Double ?? 0.3
+        typingCountdown = d.object(forKey: "typingCountdown") as? Double ?? 2
+        typingClearAutoIndent = d.object(forKey: "typingClearAutoIndent") as? Bool ?? true
+        typingTabWidth = d.object(forKey: "typingTabWidth") as? Int ?? 4
 
         captionMode = CaptionMode(rawValue: d.string(forKey: "captionMode") ?? "") ?? .staticList
         captionOpacity = d.object(forKey: "captionOpacity") as? Double ?? 0.9
@@ -100,6 +131,22 @@ final class SettingsStore: ObservableObject {
         addressMode = d.string(forKey: "addressMode") ?? "hostname"
         historyDirectory = d.string(forKey: "historyDirectory") ?? SettingsStore.defaultHistoryDirectory.path
         migrateIfNeeded()
+        migratePromptIfNeeded()
+    }
+
+    /// 用户仍在使用 v1.1 的默认提示词时，自动升级为支持多题与编程题识别的新模板；
+    /// 自定义过的提示词不会被覆盖。
+    private func migratePromptIfNeeded() {
+        guard !d.bool(forKey: "migratedPromptV3") else { return }
+        if promptTemplate.trimmingCharacters(in: .whitespacesAndNewlines) == SettingsStore.legacyPrompt.trimmingCharacters(in: .whitespacesAndNewlines) {
+            promptTemplate = SettingsStore.defaultPrompt
+        }
+        d.set(true, forKey: "migratedPromptV3")
+    }
+
+    var typingOptions: TypingOptions {
+        TypingOptions(charsPerSecond: typingCPS, jitter: typingJitter, countdown: typingCountdown,
+                      clearAutoIndent: typingClearAutoIndent, tabWidth: typingTabWidth)
     }
 
     /// 旧版本（全局 maxTokens / thinkingMode / imageDetail，DeepSeek、Kimi 走「自定义」）→ 按厂商参数
