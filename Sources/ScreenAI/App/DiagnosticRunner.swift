@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Carbon.HIToolbox
 import ImageIO
 import CoreGraphics
 
@@ -79,6 +80,22 @@ enum DiagnosticRunner {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
         guard let r = result else { print("键入超时"); return 5 }
+        if args.contains("--then-save"), r == .completed {
+            // 让目标编辑器把文档写盘，便于脚本按字节比对
+            usleep(300_000)
+            let src = CGEventSource(stateID: .hidSystemState)
+            let sKey = CGKeyCode(kVK_ANSI_S)
+            if let down = CGEvent(keyboardEventSource: src, virtualKey: sKey, keyDown: true) {
+                down.flags = .maskCommand
+                down.post(tap: .cghidEventTap)
+            }
+            if let up = CGEvent(keyboardEventSource: src, virtualKey: sKey, keyDown: false) {
+                up.flags = .maskCommand
+                up.post(tap: .cghidEventTap)
+            }
+            usleep(800_000)
+            print("已发送 ⌘S 保存")
+        }
         print("结果: \(r)\(r.message.map { "（\($0)）" } ?? "")，耗时 \(String(format: "%.1f", Date().timeIntervalSince(start))) 秒")
         return r == .completed ? 0 : 1
     }
