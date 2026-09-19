@@ -22,17 +22,26 @@ enum TypingResult {
     case empty
 }
 
+/// 键入动作的最小单位。把"打什么"与"怎么打"分开，便于在测试中用编辑器模型验证算法。
+enum TypingStep: Equatable {
+    case char(Character)     // 键入一个字符（选区存在时会替换选区）
+    case newline             // 回车
+    case marker              // 占位字符，保证随后的选区非空
+    case selectToLineStart   // 从光标选到行首（⌘⇧← 按两次，兼容智能行首）
+    case deleteSelection     // 退格，删除选区
+}
+
 /// 用合成键盘事件把文本键入当前焦点所在的输入框（需要「辅助功能」权限）。
-/// 换行使用真实回车键；可选地在换行后清除编辑器自动缩进，保证代码缩进与原文一致。
 final class TextTyper {
     static let shared = TextTyper()
+    static let markerCharacter: Character = "x"
 
     private let queue = DispatchQueue(label: "com.li.screenai.typer", qos: .userInitiated)
     private let lock = NSLock()
     private var _aborted = false
     private var _typing = false
 
-    /// (已键入字符数, 总字符数)，主线程回调
+    /// (已键入可见字符数, 总数)，主线程回调
     var onProgress: ((Int, Int) -> Void)?
     /// 主线程回调
     var onFinished: ((TypingResult) -> Void)?
@@ -57,15 +66,45 @@ final class TextTyper {
         }
     }
 
+    // MARK: 键入计划
+
+    /// 把代码转换成键入步骤。
+    /// clearAutoIndent 时的做法：换行后先打一个占位字符，保证「选到行首」的选区非空
+    /// （否则空行上的退格会删掉刚建立的换行），再选中「自动缩进 + 占位字符」，
+    /// 由本行的第一个字符直接替换选区；空行则用退格删除选区。
+    static func plan(code: String, clearAutoIndent: Bool) -> [TypingStep] {
+        var steps: [TypingStep] = []
+        let lines = code.components(separatedBy: "\n")
+        for (index, line) in lines.enumerated() {
+            if index > 0 {
+                steps.append(.newline)
+                if clearAutoIndent {
+                    steps.append(.marker)
+                    steps.append(.selectToLineStart)
+                    if line.isEmpty { steps.append(.deleteSelection) }
+                }
+            }
+            for ch in line { steps.append(.char(ch)) }
+        }
+        return steps
+    }
+
+    /// 计划中会产生可见文本的步骤数，用于进度显示
+    static func visibleCount(_ steps: [TypingStep]) -> Int {
+        steps.reduce(0) { acc, step in
+            switch step {
+            case .char, .newline: return acc + 1
+            default: return acc
+            }
+        }
+    }
+
     // MARK: 控制
 
-    func abort() {
-        lock.lock(); _aborted = true; lock.unlock()
-    }
+    func abort() { lock.lock(); _aborted = true; lock.unlock() }
 
     private var aborted: Bool { lock.lock(); defer { lock.unlock() }; return _aborted }
 
-    /// 键入文本。text 为已提取的代码原文。
     func type(_ text: String, options: TypingOptions) {
         lock.lock()
         guard !_typing else { lock.unlock(); return }
@@ -76,71 +115,60 @@ final class TextTyper {
         let code = CodeExtractor.normalize(text, tabWidth: options.tabWidth)
         guard !code.isEmpty else { finish(.empty); return }
         guard TextTyper.hasPermission() else { finish(.noPermission); return }
-        // 防止把代码打进自己的窗口
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() {
-            finish(.selfFocused); return
-        }
+        if TextTyper.selfIsFrontmost() { finish(.selfFocused); return }
 
+        let steps = TextTyper.plan(code: code, clearAutoIndent: options.clearAutoIndent)
         queue.async { [weak self] in
             guard let self = self else { return }
             if !self.sleepInterruptibly(options.countdown) { self.finish(.aborted); return }
-            // 倒计时后再确认一次焦点
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() {
-                self.finish(.selfFocused); return
-            }
-            self.run(code, options: options)
+            if TextTyper.selfIsFrontmost() { self.finish(.selfFocused); return }
+            self.run(steps, options: options)
         }
     }
 
-    // MARK: 键入实现
+    static func selfIsFrontmost() -> Bool {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid()
+    }
 
-    private func run(_ code: String, options: TypingOptions) {
+    // MARK: 执行
+
+    private func run(_ steps: [TypingStep], options: TypingOptions) {
         let source = CGEventSource(stateID: .hidSystemState)
         source?.keyboardType = 0
-        let lines = code.components(separatedBy: "\n")
-        let total = code.count
+        let total = TextTyper.visibleCount(steps)
         var typed = 0
         let baseDelay = 1.0 / max(1.0, options.charsPerSecond)
         let jitter = min(max(options.jitter, 0), 0.9)
 
-        func pause() -> Bool {
-            let factor = jitter > 0 ? Double.random(in: (1 - jitter)...(1 + jitter)) : 1
-            return sleepInterruptibly(baseDelay * factor)
-        }
-
-        for (index, line) in lines.enumerated() {
-            if index > 0 {
-                // 换行
-                postKey(CGKeyCode(kVK_Return), source: source)
-                usleep(12_000)
-                if options.clearAutoIndent {
-                    // 先打一个标记字符，保证随后的 Shift+Home 选区非空，
-                    // 否则空行上的退格会删掉刚建立的换行。
-                    postUnicode("x", source: source)
-                    usleep(6_000)
-                    // VSCode 的 Home 为智能行首：按两次才能到第 0 列
-                    postKey(CGKeyCode(kVK_Home), flags: .maskShift, source: source)
-                    postKey(CGKeyCode(kVK_Home), flags: .maskShift, source: source)
-                    usleep(6_000)
-                    if line.isEmpty {
-                        // 空行：删掉选中的「缩进 + 标记」
-                        postKey(CGKeyCode(kVK_Delete), source: source)
-                        usleep(6_000)
-                    }
-                    // 非空行：下面第一个字符会直接替换掉选区
-                }
-                if !pause() { finish(.aborted); return }
-            }
-            for ch in line {
-                if aborted { finish(.aborted); return }
-                postUnicode(String(ch), source: source)
+        for step in steps {
+            if aborted { finish(.aborted); return }
+            switch step {
+            case .char(let c):
+                postUnicode(String(c), source: source)
                 typed += 1
                 if typed % 8 == 0 { report(typed, total) }
-                if !pause() { finish(.aborted); return }
+                let factor = jitter > 0 ? Double.random(in: (1 - jitter)...(1 + jitter)) : 1
+                if !sleepInterruptibly(baseDelay * factor) { finish(.aborted); return }
+            case .newline:
+                postKey(CGKeyCode(kVK_Return), source: source)
+                typed += 1
+                report(typed, total)
+                if !sleepInterruptibly(max(baseDelay, 0.012)) { finish(.aborted); return }
+            case .marker:
+                postUnicode(String(TextTyper.markerCharacter), source: source)
+                usleep(6_000)
+            case .selectToLineStart:
+                // 按两次：VSCode 的行首是智能行首，第一次到首个非空白字符，第二次才到第 0 列；
+                // 普通 macOS 文本视图两次都停在行首，无副作用。
+                postKey(CGKeyCode(kVK_LeftArrow), flags: [.maskCommand, .maskShift], source: source)
+                postKey(CGKeyCode(kVK_LeftArrow), flags: [.maskCommand, .maskShift], source: source)
+                usleep(6_000)
+            case .deleteSelection:
+                postKey(CGKeyCode(kVK_Delete), source: source)
+                usleep(6_000)
             }
-            typed += 1   // 换行符计入进度
-            report(typed, total)
         }
+        report(total, total)
         finish(.completed)
     }
 
@@ -168,16 +196,16 @@ final class TextTyper {
             up.flags = flags
             up.post(tap: .cghidEventTap)
         }
+        usleep(3_000)
     }
 
     /// 分片睡眠，便于及时响应停止；返回 false 表示被中止
     private func sleepInterruptibly(_ seconds: TimeInterval) -> Bool {
         guard seconds > 0 else { return !aborted }
         var remaining = seconds
-        let slice = 0.02
         while remaining > 0 {
             if aborted { return false }
-            let step = min(slice, remaining)
+            let step = min(0.02, remaining)
             usleep(useconds_t(step * 1_000_000))
             remaining -= step
         }

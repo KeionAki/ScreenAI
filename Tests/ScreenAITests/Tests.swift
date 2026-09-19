@@ -659,3 +659,124 @@ func testCaptionByQuestionType() {
         T.equal(err.entries[0].text, "API Key 无效", "error text shown even in code mode")
     }
 }
+
+/// 简化的编辑器模型：用来验证键入步骤在「有自动缩进」和「无自动缩进」两种编辑器里都能还原原文。
+struct EditorSimulator {
+    var lines: [String] = [""]
+    var line = 0
+    var col = 0
+    /// 选区锚点（与光标之间为选中内容）；nil 表示无选区
+    var anchor: (line: Int, col: Int)?
+    var autoIndent: Bool
+    /// VSCode 式智能行首：第一次到首个非空白字符，第二次到第 0 列
+    var smartHome: Bool
+    var deletedEmptySelection = false
+
+    var text: String { lines.joined(separator: "\n") }
+
+    private mutating func dropSelection() {
+        guard let a = anchor else { return }
+        // 只会出现同一行内的选区
+        let lo = min(a.col, col), hi = max(a.col, col)
+        var l = lines[line]
+        let start = l.index(l.startIndex, offsetBy: lo)
+        let end = l.index(l.startIndex, offsetBy: hi)
+        l.removeSubrange(start..<end)
+        lines[line] = l
+        col = lo
+        anchor = nil
+    }
+
+    mutating func apply(_ step: TypingStep) {
+        switch step {
+        case .char(let c):
+            dropSelection()
+            var l = lines[line]
+            l.insert(c, at: l.index(l.startIndex, offsetBy: col))
+            lines[line] = l
+            col += 1
+        case .marker:
+            apply(.char(TextTyper.markerCharacter))
+        case .newline:
+            dropSelection()
+            let l = lines[line]
+            let cut = l.index(l.startIndex, offsetBy: col)
+            let head = String(l[l.startIndex..<cut])
+            let tail = String(l[cut...])
+            var indent = ""
+            if autoIndent {
+                indent = String(head.prefix(while: { $0 == " " }))
+                let trimmed = head.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasSuffix(":") || trimmed.hasSuffix("{") { indent += "    " }
+            }
+            lines[line] = head
+            lines.insert(indent + tail, at: line + 1)
+            line += 1
+            col = indent.count
+            anchor = nil
+        case .selectToLineStart:
+            // 相当于按两次：最终一定停在第 0 列
+            _ = smartHome
+            anchor = (line, col)
+            col = 0
+        case .deleteSelection:
+            if anchor == nil || anchor!.col == col {
+                deletedEmptySelection = true   // 这会误删上一个字符，算法有问题
+            }
+            dropSelection()
+        }
+    }
+
+    static func run(_ steps: [TypingStep], autoIndent: Bool, smartHome: Bool) -> (text: String, badDelete: Bool) {
+        var sim = EditorSimulator(autoIndent: autoIndent, smartHome: smartHome)
+        for s in steps { sim.apply(s) }
+        return (sim.text, sim.deletedEmptySelection)
+    }
+}
+
+func testTypingPlanRoundTrip() {
+    T.run("typing plan reproduces code in simulated editors") {
+        let code = """
+        import sys
+
+        def main():
+            counts = {}
+            for line in sys.stdin:
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                name = parts[0].split('\\\\')[-1][-16:]
+                counts[name] = counts.get(name, 0) + 1
+
+            for k, v in list(counts.items())[-8:]:
+                print(k, v)
+
+        main()
+        """
+        // 有自动缩进的编辑器（VSCode 风格）：必须开启清缩进才能还原
+        let planOn = TextTyper.plan(code: code, clearAutoIndent: true)
+        let a = EditorSimulator.run(planOn, autoIndent: true, smartHome: true)
+        T.equal(a.text, code, "VSCode 风格编辑器：清缩进后完全还原")
+        T.check(!a.badDelete, "没有出现空选区退格")
+
+        // 同一份计划在无自动缩进的编辑器里同样还原
+        let b = EditorSimulator.run(planOn, autoIndent: false, smartHome: false)
+        T.equal(b.text, code, "普通文本编辑器：同一计划同样还原")
+        T.check(!b.badDelete, "无自动缩进时也没有空选区退格")
+
+        // 关闭清缩进：无自动缩进的编辑器仍然正确
+        let planOff = TextTyper.plan(code: code, clearAutoIndent: false)
+        T.equal(EditorSimulator.run(planOff, autoIndent: false, smartHome: false).text, code, "不清缩进 + 无自动缩进：还原")
+        // 关闭清缩进遇到自动缩进编辑器就会缩进翻倍，这正是需要清缩进的原因
+        T.check(EditorSimulator.run(planOff, autoIndent: true, smartHome: true).text != code, "不清缩进 + 自动缩进：确实会错")
+
+        // 连续空行与行尾缩进
+        let tricky = "a = 1\n\n\n    b = 2\n\nif x:\n    pass\n"
+        let p2 = TextTyper.plan(code: tricky, clearAutoIndent: true)
+        T.equal(EditorSimulator.run(p2, autoIndent: true, smartHome: true).text, tricky, "空行与缩进混排也能还原")
+        T.check(!EditorSimulator.run(p2, autoIndent: true, smartHome: true).badDelete, "空行不会误删换行")
+
+        // 进度计数只统计可见字符
+        T.equal(TextTyper.visibleCount(TextTyper.plan(code: "ab\ncd", clearAutoIndent: true)), 5, "visible count = 字符数 + 换行数")
+    }
+}

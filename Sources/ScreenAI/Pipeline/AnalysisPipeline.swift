@@ -76,6 +76,13 @@ final class AnalysisPipeline {
             if !automatic { emit(.status(message: "捕获已停止，请在菜单栏点击「启动捕获」", level: "warning")) }
             return
         }
+        // 键入过程中挂起捕获，避免新的分析结果覆盖正在键入的代码
+        guard !TextTyper.shared.isTyping else {
+            if !automatic {
+                emit(.status(message: "正在键入代码，已暂停截图分析；按 \(settings.stopHotkey.displayString) 可停止键入", level: "warning"))
+            }
+            return
+        }
         guard ScreenCapturer.effectivePermission() else {
             if !automatic { emit(.failed(id: UUID().uuidString, message: CaptureError.permissionDenied.localizedDescription, source: nil)) }
             return

@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import ImageIO
 import CoreGraphics
 
@@ -7,18 +8,82 @@ import CoreGraphics
 enum DiagnosticRunner {
     static func runIfRequested() {
         let args = CommandLine.arguments
+        // --log：把诊断输出写到文件，便于用 `open -n -a` 启动时取回结果
+        if let i = args.firstIndex(of: "--log"), i + 1 < args.count,
+           args.contains("--type-file") || args.contains("--analyze-image") {
+            freopen(args[i + 1], "w", stdout)
+            freopen(args[i + 1], "a", stderr)
+        }
+        if let idx = args.firstIndex(of: "--type-file"), idx + 1 < args.count {
+            setvbuf(stdout, nil, _IONBF, 0)
+            exit(runTypeFile(path: args[idx + 1], args: args))
+        }
         guard let idx = args.firstIndex(of: "--analyze-image"), idx + 1 < args.count else { return }
         let path = args[idx + 1]
         let noStream = args.contains("--no-stream")
         let raw = args.contains("--raw")
         var promptOverride: String?
         if let p = args.firstIndex(of: "--prompt"), p + 1 < args.count { promptOverride = args[p + 1] }
+        var saveCodePath: String?
+        if let p = args.firstIndex(of: "--save-code"), p + 1 < args.count { saveCodePath = args[p + 1] }
         setvbuf(stdout, nil, _IONBF, 0)
-        let code = run(path: path, stream: !noStream, raw: raw, promptOverride: promptOverride)
+        let code = run(path: path, stream: !noStream, raw: raw, promptOverride: promptOverride, saveCodePath: saveCodePath)
         exit(code)
     }
 
-    private static func run(path: String, stream: Bool, raw: Bool, promptOverride: String?) -> Int32 {
+    /// `--type-file <路径>`：把文件内容键入到当前焦点处，用于验证键入链路。
+    /// 可选 `--countdown N` `--cps N` `--no-clear-indent` `--require-frontmost <bundleID>`
+    private static func runTypeFile(path: String, args: [String]) -> Int32 {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8), !text.isEmpty else {
+            print("无法读取文件或文件为空：\(path)")
+            return 2
+        }
+        func number(_ flag: String) -> Double? {
+            guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+            return Double(args[i + 1])
+        }
+        let settings = SettingsStore.shared
+        var options = settings.typingOptions
+        if let c = number("--countdown") { options.countdown = c }
+        if let c = number("--cps") { options.charsPerSecond = c }
+        if args.contains("--no-clear-indent") { options.clearAutoIndent = false }
+        if args.contains("--clear-indent") { options.clearAutoIndent = true }
+
+        print("辅助功能权限: \(TextTyper.hasPermission() ? "已授予" : "未授予")")
+        guard TextTyper.hasPermission() else {
+            print("请先在「系统设置 › 隐私与安全性 › 辅助功能」中允许 ScreenAI")
+            return 3
+        }
+        if let i = args.firstIndex(of: "--require-frontmost"), i + 1 < args.count {
+            let want = args[i + 1]
+            let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "(未知)"
+            guard front == want else {
+                print("当前最前应用是 \(front)，不是要求的 \(want)，已取消键入")
+                return 4
+            }
+            print("最前应用: \(front)")
+        }
+        let steps = TextTyper.plan(code: CodeExtractor.normalize(text, tabWidth: options.tabWidth), clearAutoIndent: options.clearAutoIndent)
+        print("待键入 \(text.count) 字符，\(text.components(separatedBy: "\n").count) 行；步骤 \(steps.count)，清缩进=\(options.clearAutoIndent)，速度=\(Int(options.charsPerSecond))/秒")
+
+        var result: TypingResult?
+        TextTyper.shared.onProgress = { typed, total in
+            if total > 0, typed % 40 == 0 { print("  进度 \(typed)/\(total)") }
+        }
+        TextTyper.shared.onFinished = { r in result = r }
+        let start = Date()
+        TextTyper.shared.type(text, options: options)
+        let timeout = Double(text.count) / max(1, options.charsPerSecond) * 3 + options.countdown + 30
+        let deadline = Date().addingTimeInterval(timeout)
+        while result == nil && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        guard let r = result else { print("键入超时"); return 5 }
+        print("结果: \(r)\(r.message.map { "（\($0)）" } ?? "")，耗时 \(String(format: "%.1f", Date().timeIntervalSince(start))) 秒")
+        return r == .completed ? 0 : 1
+    }
+
+    private static func run(path: String, stream: Bool, raw: Bool, promptOverride: String?, saveCodePath: String? = nil) -> Int32 {
         let start = Date()
         func stamp() -> String { String(format: "[%6.2fs]", Date().timeIntervalSince(start)) }
         func log(_ s: String) { print("\(stamp()) \(s)") }
@@ -82,6 +147,12 @@ enum DiagnosticRunner {
                 if !text.isEmpty { print() }
                 log("结束原因: \(finish ?? "未提供")")
                 log("结果: 正文 \(text.count) 字，思考 \(reasoningChars) 字，耗时 \(String(format: "%.1f", Date().timeIntervalSince(start))) 秒")
+                if let out = saveCodePath, let code = CodeExtractor.extract(text) {
+                    try? code.write(toFile: out, atomically: true, encoding: .utf8)
+                    log("已保存代码块到 \(out)（\(code.count) 字符，\(code.components(separatedBy: "\n").count) 行）")
+                } else if saveCodePath != nil {
+                    log("回答中没有代码块，未保存")
+                }
                 if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     log("⚠️ 正文为空" + (finish == "length" ? "：达到最大输出 tokens" : (reasoningChars > 0 ? "：模型只返回了思考内容" : "")))
                     box.code = 3
