@@ -20,8 +20,14 @@ open -n -a "$PWD/dist/ScreenAI.app" --args --type-file "$PWD/$SRC" --countdown 2
 CHARS=$(wc -c < "$SRC" | tr -d ' ')
 for _ in $(seq 1 $(( CHARS / 60 + 60 ))); do grep -q "^结果:" "$LOG" 2>/dev/null && break; sleep 1; done
 tail -2 "$LOG"
-for _ in $(seq 1 15); do [ -s "$DOC" ] && break; sleep 1; done
-sleep 2
+# 等编辑器把事件队列处理完并写盘：等到文件大小连续 3 秒不再变化
+prev=-1; stable=0
+for _ in $(seq 1 40); do
+  cur=$(wc -c < "$DOC" 2>/dev/null | tr -d ' ')
+  if [ "$cur" = "$prev" ] && [ "${cur:-0}" -gt 0 ]; then stable=$((stable+1)); else stable=0; fi
+  [ $stable -ge 3 ] && break
+  prev=$cur; sleep 1
+done
 python3 - "$SRC" "$DOC" "${EXTRA:-with-escape}" <<'PY'
 import sys, difflib
 src = open(sys.argv[1], encoding='utf-8').read().replace('\r\n','\n').rstrip('\n')

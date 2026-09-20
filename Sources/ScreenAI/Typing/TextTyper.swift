@@ -3,6 +3,23 @@ import AppKit
 import Carbon.HIToolbox
 import ApplicationServices
 
+/// 换行前关闭补全浮层的方式。编辑器默认「按回车接受补全」，浮层打开时回车不会换行，
+/// 会导致刚打完的一整行被下一行内容顶替；但直接按 Esc 会让全屏的浏览器退出全屏。
+enum SuggestionDismiss: String, CaseIterable, Identifiable {
+    case none          // 不处理
+    case cursorNudge   // 左移再右移：光标位置不变，可关闭浮层，浏览器全屏不受影响
+    case escape        // 按 Esc：最彻底，但会退出浏览器全屏
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .none: return "不处理"
+        case .cursorNudge: return "移动光标（推荐）"
+        case .escape: return "按 Esc（会退出浏览器全屏）"
+        }
+    }
+}
+
 struct TypingOptions {
     var charsPerSecond: Double = 25
     /// 每个字符的间隔随机抖动比例（0 = 匀速，0.5 = ±50%）
@@ -11,9 +28,7 @@ struct TypingOptions {
     var countdown: TimeInterval = 2
     /// 换行后清除编辑器自动插入的缩进（VSCode 默认会自动缩进）
     var clearAutoIndent: Bool = true
-    /// 换行前先按 Esc 关闭补全提示：否则回车会被「按回车接受补全」吃掉，
-    /// 导致没有真正换行，随后的「选到行首」会选中上一整行并被下一个字符替换。
-    var dismissSuggestions: Bool = true
+    var suggestionDismiss: SuggestionDismiss = .cursorNudge
     var tabWidth: Int = 4
 }
 
@@ -29,7 +44,8 @@ enum TypingResult {
 enum TypingStep: Equatable {
     case char(Character)     // 键入一个字符（选区存在时会替换选区）
     case newline             // 回车
-    case escape              // Esc，关闭补全提示等浮层
+    case escape              // Esc，关闭补全浮层（会退出浏览器全屏）
+    case cursorNudge         // 左移再右移，位置不变但会关闭补全浮层
     case marker              // 占位字符，保证随后的选区非空
     case selectToLineStart   // 从光标选到行首（⌘⇧← 按两次，兼容智能行首）
     case deleteSelection     // 退格，删除选区
@@ -76,14 +92,19 @@ final class TextTyper {
     /// clearAutoIndent 时的做法：换行后先打一个占位字符，保证「选到行首」的选区非空
     /// （否则空行上的退格会删掉刚建立的换行），再选中「自动缩进 + 占位字符」，
     /// 由本行的第一个字符直接替换选区；空行则用退格删除选区。
-    static func plan(code: String, clearAutoIndent: Bool, dismissSuggestions: Bool = true) -> [TypingStep] {
+    static func plan(code: String, clearAutoIndent: Bool, dismiss: SuggestionDismiss = .cursorNudge) -> [TypingStep] {
         var steps: [TypingStep] = []
         let lines = code.components(separatedBy: "\n")
-        if dismissSuggestions { steps.append(.escape) }
+        // 注意：不在开头插入关闭浮层的动作。此时光标可能停在文稿最开头，
+        // 左移无效而右移会前进一格，导致插入点偏移；换行前一定已经离开了文稿开头。
         for (index, line) in lines.enumerated() {
             if index > 0 {
                 // 先关掉补全浮层，保证回车真的换行，而不是被「回车接受补全」吃掉
-                if dismissSuggestions { steps.append(.escape) }
+                switch dismiss {
+                case .none: break
+                case .cursorNudge: steps.append(.cursorNudge)
+                case .escape: steps.append(.escape)
+                }
                 steps.append(.newline)
                 if clearAutoIndent {
                     steps.append(.marker)
@@ -124,7 +145,7 @@ final class TextTyper {
         guard TextTyper.hasPermission() else { finish(.noPermission); return }
         if TextTyper.selfIsFrontmost() { finish(.selfFocused); return }
 
-        let steps = TextTyper.plan(code: code, clearAutoIndent: options.clearAutoIndent, dismissSuggestions: options.dismissSuggestions)
+        let steps = TextTyper.plan(code: code, clearAutoIndent: options.clearAutoIndent, dismiss: options.suggestionDismiss)
         queue.async { [weak self] in
             guard let self = self else { return }
             if !self.sleepInterruptibly(options.countdown) { self.finish(.aborted); return }
@@ -158,6 +179,11 @@ final class TextTyper {
                 if !sleepInterruptibly(baseDelay * factor) { finish(.aborted); return }
             case .escape:
                 postKey(CGKeyCode(kVK_Escape), source: source)
+                usleep(12_000)
+            case .cursorNudge:
+                // 左移再右移：净位移为零，但足以让编辑器取消补全浮层
+                postKey(CGKeyCode(kVK_LeftArrow), source: source)
+                postKey(CGKeyCode(kVK_RightArrow), source: source)
                 usleep(12_000)
             case .newline:
                 postKey(CGKeyCode(kVK_Return), source: source)

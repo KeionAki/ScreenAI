@@ -112,7 +112,11 @@
 
 - 需要「辅助功能」权限（`AXIsProcessTrusted`），与屏幕录制是两项独立授权。
 - 用 `CGEvent` + `keyboardSetUnicodeString` 逐字符合成键盘事件，投递到 `.cghidEventTap`；换行用真实回车键（`kVK_Return`）。
-- **换行前先按 Esc**（`dismissSuggestions`，默认开）：编辑器默认 `acceptSuggestionOnEnter: "on"`，补全浮层打开时回车会被用来接受补全而不换行；此时后续的「占位字符 + 选到行首」会选中上一整行并被下一行首字符替换，表现为「刚打完的一整行突然消失」。Esc 先关闭浮层可避免。`EditorSimulator` 里用 `suggestOnEnter` 建模了这一行为并作为回归测试。
+- **换行前关闭补全浮层**（`SuggestionDismiss`，默认 `.cursorNudge`）：编辑器默认 `acceptSuggestionOnEnter: "on"`，浮层打开时回车会被用来接受补全而不换行，随后的「占位字符 + 选到行首」就会选中上一整行并被下一行首字符替换，表现为「刚打完的一整行突然消失」。
+  - `.escape` 最彻底，但实测会让网页退出 HTML5 全屏（`fullscreenchange` 计数 0→1），故不作默认。
+  - `.cursorNudge` 用「左移 + 右移」关闭浮层，净位移为零，对浏览器全屏无影响，实测 VSCode 逐字节一致。
+  - 计划开头不插入关闭浮层的动作：此时光标可能停在文稿最开头，左移无效而右移会前进一格造成插入点偏移；换行前一定已经离开开头。
+- **浏览器全屏的输入抑制**：网页进入 HTML5 全屏后，若未发生真实用户交互，Chrome 会丢弃随后一小段的文本写入（按键事件仍然送达，`keydown` 计数正常，但 `value` 不变，且只影响进入全屏后的第一次键入）。用鼠标点击一次即可解除。真实流程中用户本来就要点进编辑器放光标，故不额外处理，只在文档中说明。方向键预热无效，已验证并移除。
 - **VSCode 适配**：自动补全括号/引号无法在单次按键层面绕开，要求用户在 `settings.json` 中关闭 `editor.autoClosingBrackets` 与 `editor.autoClosingQuotes`。自动缩进由程序处理：换行后先打一个标记字符（保证选区非空，否则空行上的退格会删掉刚建立的换行），再按两次 Shift+Home（VSCode 为智能行首，两次才到第 0 列）选中「缩进 + 标记」，随后键入的第一个字符直接替换选区；空行则用退格删除选区。
 - 速率 = 1 / 每秒字符数，乘以 `1 ± jitter` 的随机系数；睡眠分片执行以便及时响应中止。
 - 安全：开始前倒计时、焦点在自身窗口时拒绝键入、键入期间挂起截图捕获（`AnalysisPipeline.trigger` 直接返回）、随时可中止、只键入 `CodeExtractor` 提取出的代码。

@@ -76,7 +76,7 @@ final class SettingsStore: ObservableObject {
     @Published var typingJitter: Double { didSet { d.set(typingJitter, forKey: "typingJitter") } }
     @Published var typingCountdown: Double { didSet { d.set(typingCountdown, forKey: "typingCountdown") } }
     @Published var typingClearAutoIndent: Bool { didSet { d.set(typingClearAutoIndent, forKey: "typingClearAutoIndent") } }
-    @Published var typingDismissSuggestions: Bool { didSet { d.set(typingDismissSuggestions, forKey: "typingDismissSuggestions") } }
+    @Published var typingSuggestionDismiss: SuggestionDismiss { didSet { d.set(typingSuggestionDismiss.rawValue, forKey: "typingSuggestionDismiss") } }
     @Published var typingTabWidth: Int { didSet { d.set(typingTabWidth, forKey: "typingTabWidth") } }
 
     // MARK: Caption
@@ -130,7 +130,14 @@ final class SettingsStore: ObservableObject {
         typingJitter = d.object(forKey: "typingJitter") as? Double ?? 0.3
         typingCountdown = d.object(forKey: "typingCountdown") as? Double ?? 2
         typingClearAutoIndent = d.object(forKey: "typingClearAutoIndent") as? Bool ?? true
-        typingDismissSuggestions = d.object(forKey: "typingDismissSuggestions") as? Bool ?? true
+        // 旧版本是布尔开关（按 Esc）；Esc 会让全屏浏览器退出全屏，迁移为「移动光标」
+        if let raw = d.string(forKey: "typingSuggestionDismiss"), let m = SuggestionDismiss(rawValue: raw) {
+            typingSuggestionDismiss = m
+        } else if let legacy = d.object(forKey: "typingDismissSuggestions") as? Bool {
+            typingSuggestionDismiss = legacy ? .cursorNudge : .none
+        } else {
+            typingSuggestionDismiss = .cursorNudge
+        }
         typingTabWidth = d.object(forKey: "typingTabWidth") as? Int ?? 4
 
         captionMode = CaptionMode(rawValue: d.string(forKey: "captionMode") ?? "") ?? .staticList
@@ -160,7 +167,7 @@ final class SettingsStore: ObservableObject {
 
     var typingOptions: TypingOptions {
         TypingOptions(charsPerSecond: typingCPS, jitter: typingJitter, countdown: typingCountdown,
-                      clearAutoIndent: typingClearAutoIndent, dismissSuggestions: typingDismissSuggestions,
+                      clearAutoIndent: typingClearAutoIndent, suggestionDismiss: typingSuggestionDismiss,
                       tabWidth: typingTabWidth)
     }
 

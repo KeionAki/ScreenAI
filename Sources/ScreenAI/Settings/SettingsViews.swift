@@ -288,8 +288,10 @@ struct CaptureSettingsView: View {
                 LabeledContent("开始前倒计时 \(String(format: "%.1f", settings.typingCountdown)) 秒") {
                     Slider(value: $settings.typingCountdown, in: 0...10, step: 0.5).frame(width: 200)
                 }
-                Toggle("换行前按 Esc 关闭补全提示（强烈建议开启）", isOn: $settings.typingDismissSuggestions)
-                Text("编辑器默认「按回车接受补全」，补全浮层打开时回车不会换行，会导致刚打完的一整行被下一行内容顶替。开启此项可避免。")
+                Picker("换行前关闭补全浮层", selection: $settings.typingSuggestionDismiss) {
+                    ForEach(SuggestionDismiss.allCases) { Text($0.displayName).tag($0) }
+                }
+                Text("编辑器默认「按回车接受补全」，浮层打开时回车不会换行，会导致刚打完的一整行被下一行内容顶替。「移动光标」用左移再右移关闭浮层，光标位置不变；「按 Esc」更彻底，但会让全屏的浏览器退出全屏。")
                     .font(.caption).foregroundColor(.secondary)
                 Toggle("换行后清除编辑器自动缩进", isOn: $settings.typingClearAutoIndent)
                 LabeledContent("制表符展开为空格数") {

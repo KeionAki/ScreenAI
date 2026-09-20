@@ -15,6 +15,24 @@ enum DiagnosticRunner {
             freopen(args[i + 1], "w", stdout)
             freopen(args[i + 1], "a", stderr)
         }
+        if let idx = args.firstIndex(of: "--click"), idx + 2 < args.count,
+           let x = Double(args[idx + 1]), let y = Double(args[idx + 2]) {
+            setvbuf(stdout, nil, _IONBF, 0)
+            guard TextTyper.hasPermission() else { print("辅助功能权限: 未授予"); exit(3) }
+            let pt = CGPoint(x: x, y: y)
+            let src = CGEventSource(stateID: .hidSystemState)
+            CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: pt, mouseButton: .left)?.post(tap: .cghidEventTap)
+            usleep(80_000)
+            CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left)?.post(tap: .cghidEventTap)
+            usleep(50_000)
+            CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left)?.post(tap: .cghidEventTap)
+            print("已在 (\(Int(x)), \(Int(y))) 点击")
+            exit(0)
+        }
+        if let idx = args.firstIndex(of: "--press"), idx + 1 < args.count {
+            setvbuf(stdout, nil, _IONBF, 0)
+            exit(runPress(spec: args[idx + 1]))
+        }
         if let idx = args.firstIndex(of: "--type-file"), idx + 1 < args.count {
             setvbuf(stdout, nil, _IONBF, 0)
             exit(runTypeFile(path: args[idx + 1], args: args))
@@ -30,6 +48,36 @@ enum DiagnosticRunner {
         setvbuf(stdout, nil, _IONBF, 0)
         let code = run(path: path, stream: !noStream, raw: raw, promptOverride: promptOverride, saveCodePath: saveCodePath)
         exit(code)
+    }
+
+    /// `--press <组合键>`：发送一次按键，如 `ctrl+cmd+f`、`esc`。用于测试。
+    private static func runPress(spec: String) -> Int32 {
+        guard TextTyper.hasPermission() else { print("辅助功能权限: 未授予"); return 3 }
+        var flags: CGEventFlags = []
+        var keyName = ""
+        for part in spec.lowercased().split(separator: "+").map(String.init) {
+            switch part {
+            case "cmd", "command": flags.insert(.maskCommand)
+            case "ctrl", "control": flags.insert(.maskControl)
+            case "alt", "option": flags.insert(.maskAlternate)
+            case "shift": flags.insert(.maskShift)
+            default: keyName = part
+            }
+        }
+        let map: [String: Int] = ["f": kVK_ANSI_F, "esc": kVK_Escape, "escape": kVK_Escape,
+                                  "return": kVK_Return, "enter": kVK_Return, "left": kVK_LeftArrow,
+                                  "right": kVK_RightArrow, "s": kVK_ANSI_S, "tab": kVK_Tab]
+        guard let code = map[keyName] else { print("不认识的按键: \(keyName)"); return 2 }
+        let src = CGEventSource(stateID: .hidSystemState)
+        if let down = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(code), keyDown: true) {
+            down.flags = flags; down.post(tap: .cghidEventTap)
+        }
+        usleep(30_000)
+        if let up = CGEvent(keyboardEventSource: src, virtualKey: CGKeyCode(code), keyDown: false) {
+            up.flags = flags; up.post(tap: .cghidEventTap)
+        }
+        print("已发送按键: \(spec)")
+        return 0
     }
 
     /// `--type-file <路径>`：把文件内容键入到当前焦点处，用于验证键入链路。
@@ -49,7 +97,9 @@ enum DiagnosticRunner {
         if let c = number("--cps") { options.charsPerSecond = c }
         if args.contains("--no-clear-indent") { options.clearAutoIndent = false }
         if args.contains("--clear-indent") { options.clearAutoIndent = true }
-        if args.contains("--no-escape") { options.dismissSuggestions = false }
+        if args.contains("--no-escape") { options.suggestionDismiss = .none }
+        if let i = args.firstIndex(of: "--dismiss"), i + 1 < args.count,
+           let m = SuggestionDismiss(rawValue: args[i + 1]) { options.suggestionDismiss = m }
 
         print("辅助功能权限: \(TextTyper.hasPermission() ? "已授予" : "未授予")")
         guard TextTyper.hasPermission() else {
@@ -65,8 +115,8 @@ enum DiagnosticRunner {
             }
             print("最前应用: \(front)")
         }
-        let steps = TextTyper.plan(code: CodeExtractor.normalize(text, tabWidth: options.tabWidth), clearAutoIndent: options.clearAutoIndent, dismissSuggestions: options.dismissSuggestions)
-        print("待键入 \(text.count) 字符，\(text.components(separatedBy: "\n").count) 行；步骤 \(steps.count)，清缩进=\(options.clearAutoIndent)，关补全=\(options.dismissSuggestions)，速度=\(Int(options.charsPerSecond))/秒")
+        let steps = TextTyper.plan(code: CodeExtractor.normalize(text, tabWidth: options.tabWidth), clearAutoIndent: options.clearAutoIndent, dismiss: options.suggestionDismiss)
+        print("待键入 \(text.count) 字符，\(text.components(separatedBy: "\n").count) 行；步骤 \(steps.count)，清缩进=\(options.clearAutoIndent)，关浮层=\(options.suggestionDismiss.rawValue)，速度=\(Int(options.charsPerSecond))/秒")
 
         var result: TypingResult?
         TextTyper.shared.onProgress = { typed, total in

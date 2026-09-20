@@ -703,6 +703,14 @@ struct EditorSimulator {
             apply(.char(TextTyper.markerCharacter))
         case .escape:
             suggestionOpen = false
+        case .cursorNudge:
+            // 左移再右移：净位移为零
+            if col > 0 { col -= 1 }
+            else if line > 0 { line -= 1; col = lines[line].count }
+            if col < lines[line].count { col += 1 }
+            else if line < lines.count - 1 { line += 1; col = 0 }
+            suggestionOpen = false
+            anchor = nil
         case .newline:
             if suggestOnEnter && suggestionOpen {
                 // 回车被补全浮层吃掉：只关闭浮层，不换行
@@ -793,7 +801,7 @@ func testSuggestionSwallowsEnter() {
         let lineCount = code.components(separatedBy: "\n").count
 
         // 复现：不按 Esc，补全浮层把回车吃掉
-        let broken = TextTyper.plan(code: code, clearAutoIndent: true, dismissSuggestions: false)
+        let broken = TextTyper.plan(code: code, clearAutoIndent: true, dismiss: .none)
         let bad = EditorSimulator.run(broken, autoIndent: true, smartHome: true, suggestOnEnter: true)
         T.check(bad.swallowedNewlines > 0, "确实有回车被补全吃掉：\(bad.swallowedNewlines) 次")
         T.check(bad.text != code, "结果与原文不一致（复现用户报告的问题）")
@@ -802,17 +810,29 @@ func testSuggestionSwallowsEnter() {
         T.check(!bad.text.hasPrefix("import sys\n"), "首行 import sys 被后续内容顶替")
 
         // 修复：换行前按 Esc 关闭浮层
-        let fixed = TextTyper.plan(code: code, clearAutoIndent: true, dismissSuggestions: true)
+        let fixed = TextTyper.plan(code: code, clearAutoIndent: true, dismiss: .cursorNudge)
         let good = EditorSimulator.run(fixed, autoIndent: true, smartHome: true, suggestOnEnter: true)
         T.equal(good.swallowedNewlines, 0, "没有回车被吃掉")
-        T.equal(good.text, code, "开启 Esc 后完全还原")
+        T.equal(good.text, code, "移动光标关闭浮层后完全还原")
+
+        // Esc 方式同样能修复，但会退出浏览器全屏，故不作默认
+        let esc = TextTyper.plan(code: code, clearAutoIndent: true, dismiss: .escape)
+        let escRun = EditorSimulator.run(esc, autoIndent: true, smartHome: true, suggestOnEnter: true)
+        T.equal(escRun.text, code, "Esc 方式也能还原")
+        T.check(esc.contains(.escape) && !esc.contains(.cursorNudge), "Esc 模式只用 Esc")
+        T.check(!TextTyper.plan(code: code, clearAutoIndent: true, dismiss: .cursorNudge).contains(.escape),
+                "默认模式完全不发送 Esc，不会退出浏览器全屏")
+
+        // 计划开头不得有关闭浮层的动作：此时光标可能在文稿最开头，右移会让插入点偏移
+        let first = TextTyper.plan(code: code, clearAutoIndent: true, dismiss: .cursorNudge).first
+        if case .char = first { } else { T.check(false, "计划应以字符开始，实际是 \(String(describing: first))") }
 
         // 同时在不弹补全的编辑器里也不受影响
         T.equal(EditorSimulator.run(fixed, autoIndent: true, smartHome: true).text, code, "无补全编辑器同样还原")
         T.equal(EditorSimulator.run(fixed, autoIndent: false, smartHome: false).text, code, "无自动缩进编辑器同样还原")
 
         // 最安全配置：关闭自动缩进 + 不清缩进 → 键入不含任何删除动作
-        let additive = TextTyper.plan(code: code, clearAutoIndent: false, dismissSuggestions: true)
+        let additive = TextTyper.plan(code: code, clearAutoIndent: false, dismiss: .cursorNudge)
         T.check(!additive.contains(.deleteSelection) && !additive.contains(.selectToLineStart) && !additive.contains(.marker),
                 "不清缩进时计划里没有任何删除或选择动作")
         T.equal(EditorSimulator.run(additive, autoIndent: false, smartHome: false, suggestOnEnter: true).text, code, "纯追加模式还原")
